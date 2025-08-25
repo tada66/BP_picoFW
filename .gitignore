@@ -1,0 +1,28 @@
+# Build directories
+/build/
+/cmake-build-*/
+
+# Binary and object files
+*.bin
+*.elf
+*.hex
+*.uf2
+*.dis
+*.map
+*.o
+*.d
+
+# CMake temporary files
+CMakeFiles/
+CMakeCache.txt
+cmake_install.cmake
+
+# Editor backup files
+*~
+*.bak
+.*.swp
+.vscode
+
+# OS specific files
+.DS_Store
+Thumbs.db
