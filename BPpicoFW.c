@@ -1,32 +1,13 @@
 #include <stdio.h>
 #include <string.h>
 #include <stdbool.h>
+
+#include "DS18B20.h"
+#include "PIN_ASSIGNMENTS.h"
 #include "pico/stdlib.h"
 #include "hardware/uart.h"
 #include "hardware/irq.h"
-
-// By default the stdout UART is `uart0`, so we will use the second one
-#define UART_ID uart1
-#define BAUD_RATE 115200
-#define UART_TX_PIN 1
-#define UART_RX_PIN 2
-
-// Stepper driver pins
-#define Y_STEP_PIN 16
-#define Y_DIR_PIN 17
-#define X_STEP_PIN 18
-#define X_DIR_PIN 19
-#define X_DIR_PIN_INV 20
-#define Z_STEP_PIN 21
-#define Z_DIR_PIN 22
-
-// Stepper driver enable
-#define EN_SENSE_PIN 12
-#define EN_PIN 13   // a4988 drivers (and compatibles) use LOW to enable
-
-#define TEMP_SENSE_PIN 15
-#define FAN_PWM_PIN 14
-#define ONBOARD_LED_PIN 25
+#include "hardware/pwm.h"
 
 #define CMD_BUFFER_SIZE 128
 char cmd_buffer[CMD_BUFFER_SIZE];
@@ -38,6 +19,7 @@ enum Commands {
     CMD_STOP = 0x04
 };
 bool is_paused = false;
+
 void on_uart_rx()
 {
     // Process incoming data
@@ -107,10 +89,19 @@ void on_uart_rx()
     }
 }
 
+void fan_set_speed(float duty_percent) {
+    if (duty_percent < 0) duty_percent = 0;
+    if (duty_percent > 100) duty_percent = 100;
+
+    uint slice = pwm_gpio_to_slice_num(FAN_PWM_PIN);
+    uint chan  = pwm_gpio_to_channel(FAN_PWM_PIN);
+    uint16_t level = (uint16_t)(duty_percent / 100.0 * 65535);
+    pwm_set_chan_level(slice, chan, level);
+}
+
 int main()
 {
     stdio_init_all();
-
     // GPIO setup
     gpio_init(Y_STEP_PIN); gpio_set_dir(Y_STEP_PIN, GPIO_OUT);
     gpio_init(Y_DIR_PIN); gpio_set_dir(Y_DIR_PIN, GPIO_OUT);
@@ -121,23 +112,34 @@ int main()
     gpio_init(Z_DIR_PIN); gpio_set_dir(Z_DIR_PIN, GPIO_OUT);
     gpio_init(EN_SENSE_PIN); gpio_set_dir(EN_SENSE_PIN, GPIO_IN);
     gpio_init(EN_PIN); gpio_set_dir(EN_PIN, GPIO_OUT);
-    gpio_init(TEMP_SENSE_PIN); gpio_set_dir(TEMP_SENSE_PIN, GPIO_IN);
+    gpio_init(TEMP_SENSE_PIN); gpio_set_dir(TEMP_SENSE_PIN, GPIO_OUT);
+    gpio_put(TEMP_SENSE_PIN, 1);
     gpio_init(FAN_PWM_PIN); gpio_set_dir(FAN_PWM_PIN, GPIO_OUT);
     gpio_init(ONBOARD_LED_PIN); gpio_set_dir(ONBOARD_LED_PIN, GPIO_OUT);
+
+    // Setup PWM on FAN pin
+    gpio_set_function(FAN_PWM_PIN, GPIO_FUNC_PWM);
+    uint slice = pwm_gpio_to_slice_num(FAN_PWM_PIN);
+    pwm_set_wrap(slice, 65535); // 16-bit resolution
+    pwm_set_clkdiv(slice, 76.3f); // divisor for ~25 kHz, lower frequencies cause the fan to emit audible high pitched noise
+    pwm_set_enabled(slice, true);
 
     // UART setup
     uart_init(UART_ID, BAUD_RATE);
     gpio_set_function(UART_TX_PIN, GPIO_FUNC_UART);
     gpio_set_function(UART_RX_PIN, GPIO_FUNC_UART);
-    irq_set_exclusive_handler(UART0_IRQ, on_uart_rx);
-    irq_set_enabled(UART0_IRQ, true);
+    irq_set_exclusive_handler(UART1_IRQ, on_uart_rx);
+    irq_set_enabled(UART1_IRQ, true);
     uart_set_irq_enables(UART_ID, true, false);
+    printf("Initialization complete!\n");
 
     gpio_put(ONBOARD_LED_PIN, 1); // Turn on onboard LED to indicate ready
     gpio_put(EN_PIN, 0);
 
-    while (!is_paused) {
-        printf("Hello, world!\n");
+    while (1) {
+        float t = ds18b20_read_temp();
+        printf("Temperature: %.2f °C\n", t);
+
         sleep_ms(1000);
     }
 }
