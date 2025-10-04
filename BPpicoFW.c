@@ -4,6 +4,7 @@
 
 #include "DS18B20.h"
 #include "PIN_ASSIGNMENTS.h"
+#include "UART.h"
 #include "pico/stdlib.h"
 #include "hardware/uart.h"
 #include "hardware/irq.h"
@@ -13,10 +14,16 @@
 char cmd_buffer[CMD_BUFFER_SIZE];
 int cmd_buffer_index = 0;
 enum Commands {
-    CMD_OK = 0x01,
-    CMD_PAUSE = 0x02,
-    CMD_RESUME = 0x03,
-    CMD_STOP = 0x04
+    CMD_PING = 0x01,
+    CMD_READY = 0x02,
+    CMD_MOVE_ABS = 0x10,
+    CMD_TRACK = 0x11,
+    CMD_PAUSE = 0x12,
+    CMD_RESUME = 0x13,
+    CMD_GETPOS = 0x14,
+    CMD_POSITION = 0x15,
+    CMD_STATUS = 0x20,
+    CMD_ESTOPTRIG = 0x21
 };
 bool is_paused = false;
 
@@ -41,15 +48,14 @@ void on_uart_rx()
         cmd_buffer[cmd_buffer_index++] = c;
         if (cmd_buffer_index >= 3) {
             int data_length = (unsigned char)cmd_buffer[2];
-            if (cmd_buffer_index == data_length + 4) { // DATA + START + CMD + LEN + CHK
+            if (cmd_buffer_index == data_length + 4) { // DATA + START + CMD + LEN + CHKSUM (crc8)
                 // Full command received
                 // Verify checksum
-                char checksum = 0;
-                for (int i = 0; i < cmd_buffer_index - 1; i++) {
-                    checksum ^= cmd_buffer[i];
-                }
-                if (checksum != cmd_buffer[cmd_buffer_index - 1]) {
-                    fprintf(stderr, "ERROR: Checksum mismatch!\n");
+                uint8_t received_crc = (uint8_t)cmd_buffer[cmd_buffer_index - 1];
+                uint8_t calculated_crc = calculate_crc8((uint8_t *)cmd_buffer, cmd_buffer_index - 1);
+                if (received_crc != calculated_crc) {
+                    fprintf(stderr, "ERROR: CRC8 mismatch! Received: 0x%02X, Calculated: 0x%02X\n", 
+                           received_crc, calculated_crc);
                     // Try to resync by looking for next 0xAA
                     int i = 1;
                     while (i < cmd_buffer_index && cmd_buffer[i] != 0xAA) i++;
@@ -61,25 +67,12 @@ void on_uart_rx()
                     }
                     continue;
                 }
+
+                printf("Command received: 0x%02X, Length: %d\n", cmd_buffer[1], data_length);
                 // Process fast commands here, movements will be handled in main loop to avoid blocking
                 switch (cmd_buffer[1]) {
-                    case CMD_OK:
-                        printf("Received CMD_OK\n");
-                        break;
-                    case CMD_PAUSE:
-                        printf("Received CMD_PAUSE\n");
-                        is_paused = true;
-                        break;
-                    case CMD_RESUME:
-                        printf("Received CMD_RESUME\n");
-                        is_paused = false;
-                        break;
-                    case CMD_STOP:
-                        printf("Received CMD_STOP\n");
-                        gpio_put(EN_PIN, 1); // Disable steppers
-                        break;
-                    default:
-                        fprintf(stderr, "ERROR: Unknown command!\n");
+                    case CMD_PING:
+                        send_uart_response(CMD_PING, NULL, 0);
                         break;
                 }
                 cmd_buffer_index = 0; // Reset buffer index for next command
@@ -102,6 +95,12 @@ void fan_set_speed(float duty_percent) {
 int main()
 {
     stdio_init_all();
+    
+    // Configure stdio to use USB only, not UART
+    stdio_usb_init();
+    // Disable stdio on UART - this ensures printf doesn't go to UART
+    stdio_uart_init_full(uart1, 115200, -1, -1);
+    
     // GPIO setup
     gpio_init(Y_STEP_PIN); gpio_set_dir(Y_STEP_PIN, GPIO_OUT);
     gpio_init(Y_DIR_PIN); gpio_set_dir(Y_DIR_PIN, GPIO_OUT);
@@ -128,18 +127,32 @@ int main()
     uart_init(UART_ID, BAUD_RATE);
     gpio_set_function(UART_TX_PIN, GPIO_FUNC_UART);
     gpio_set_function(UART_RX_PIN, GPIO_FUNC_UART);
-    irq_set_exclusive_handler(UART1_IRQ, on_uart_rx);
-    irq_set_enabled(UART1_IRQ, true);
+    irq_set_exclusive_handler(UART0_IRQ, on_uart_rx);
+    irq_set_enabled(UART0_IRQ, true);
     uart_set_irq_enables(UART_ID, true, false);
     printf("Initialization complete!\n");
 
     gpio_put(ONBOARD_LED_PIN, 1); // Turn on onboard LED to indicate ready
     gpio_put(EN_PIN, 0);
 
+    int counter = 0;
+    char uart_buffer[64];
+
     while (1) {
         float t = ds18b20_read_temp();
+        // Send telemetry in text format for easy debugging
+        sprintf(uart_buffer, "%d,%.2f\r\n", counter, t);
+        uart_puts(UART_ID, uart_buffer);
+        
+        // Or send it in binary format with CRC8
+        // Format: START + CMD_POSITION + LEN(8) + float temp + int counter + CRC8
+        uint8_t telemetry[9];
+        memcpy(&telemetry[0], &t, sizeof(float));
+        memcpy(&telemetry[4], &counter, sizeof(int));
+        send_uart_response(CMD_STATUS, telemetry, 8);
+        
         printf("Temperature: %.2f °C\n", t);
-
+        counter++;
         sleep_ms(1000);
     }
 }

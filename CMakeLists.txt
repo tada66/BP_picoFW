@@ -35,19 +35,20 @@ pico_sdk_init()
 
 # Add executable. Default name is the project name, version 0.1
 
-add_executable(BPpicoFW BPpicoFW.c DS18B20.c)
+add_executable(BPpicoFW BPpicoFW.c DS18B20.c UART.c)
 
 pico_set_program_name(BPpicoFW "BPpicoFW")
 pico_set_program_version(BPpicoFW "0.1")
 
 # Modify the below lines to enable/disable output over UART/USB
-pico_enable_stdio_uart(BPpicoFW 0)
+pico_enable_stdio_uart(BPpicoFW 1)
 pico_enable_stdio_usb(BPpicoFW 1)
 
 # Add the standard library to the build
 target_link_libraries(BPpicoFW
         pico_stdlib
-        hardware_pwm )
+        hardware_pwm 
+        hardware_uart)
 
 # Add the standard include files to the build
 target_include_directories(BPpicoFW PRIVATE

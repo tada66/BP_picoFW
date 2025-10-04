@@ -1,5 +1,5 @@
 // By default the stdout UART is `uart0`, so we will use the second one
-#define UART_ID uart1
+#define UART_ID uart0
 #define BAUD_RATE 115200
 #define UART_TX_PIN 1
 #define UART_RX_PIN 2
