@@ -9,78 +9,8 @@
 #include "hardware/uart.h"
 #include "hardware/irq.h"
 #include "hardware/pwm.h"
-
-#define CMD_BUFFER_SIZE 128
-char cmd_buffer[CMD_BUFFER_SIZE];
-int cmd_buffer_index = 0;
-enum Commands {
-    CMD_PING = 0x01,
-    CMD_READY = 0x02,
-    CMD_MOVE_ABS = 0x10,
-    CMD_TRACK = 0x11,
-    CMD_PAUSE = 0x12,
-    CMD_RESUME = 0x13,
-    CMD_GETPOS = 0x14,
-    CMD_POSITION = 0x15,
-    CMD_STATUS = 0x20,
-    CMD_ESTOPTRIG = 0x21
-};
 bool is_paused = false;
 
-void on_uart_rx()
-{
-    // Process incoming data
-    // First byte is START byte 0xAA
-    // Second byte is command type (defined in enum Commands)
-    // Third byte is data length
-    // DATA bytes follow
-    // Last byte is checksum
-    while (uart_is_readable(UART_ID)) {
-        uint8_t c = uart_getc(UART_ID);
-        if (cmd_buffer_index >= CMD_BUFFER_SIZE - 1) {
-            fprintf(stderr, "ERROR: Command buffer overflow!\n");
-            cmd_buffer_index = 0;
-            continue;
-        }
-        if (cmd_buffer_index == 0 && c != (char)0xAA) {
-            continue;
-        }
-        cmd_buffer[cmd_buffer_index++] = c;
-        if (cmd_buffer_index >= 3) {
-            int data_length = (unsigned char)cmd_buffer[2];
-            if (cmd_buffer_index == data_length + 4) { // DATA + START + CMD + LEN + CHKSUM (crc8)
-                // Full command received
-                // Verify checksum
-                uint8_t received_crc = (uint8_t)cmd_buffer[cmd_buffer_index - 1];
-                uint8_t calculated_crc = calculate_crc8((uint8_t *)cmd_buffer, cmd_buffer_index - 1);
-                if (received_crc != calculated_crc) {
-                    fprintf(stderr, "ERROR: CRC8 mismatch! Received: 0x%02X, Calculated: 0x%02X\n", 
-                           received_crc, calculated_crc);
-                    // Try to resync by looking for next 0xAA
-                    int i = 1;
-                    while (i < cmd_buffer_index && cmd_buffer[i] != 0xAA) i++;
-                    if (i < cmd_buffer_index) {
-                        memmove(cmd_buffer, &cmd_buffer[i], cmd_buffer_index - i);
-                        cmd_buffer_index -= i;
-                    } else {
-                        cmd_buffer_index = 0;
-                    }
-                    continue;
-                }
-
-                printf("Command received: 0x%02X, Length: %d\n", cmd_buffer[1], data_length);
-                // Process fast commands here, movements will be handled in main loop to avoid blocking
-                switch (cmd_buffer[1]) {
-                    case CMD_PING:
-                        send_uart_response(CMD_PING, NULL, 0);
-                        break;
-                }
-                cmd_buffer_index = 0; // Reset buffer index for next command
-            }
-        }
-
-    }
-}
 
 void fan_set_speed(float duty_percent) {
     if (duty_percent < 0) duty_percent = 0;
@@ -98,7 +28,8 @@ int main()
     
     // Configure stdio to use USB only, not UART
     stdio_usb_init();
-    // Disable stdio on UART - this ensures printf doesn't go to UART
+    // Disable stdio on UART
+    // This unsures that printf only use the USB for output and doesn't make the uart output garbage
     stdio_uart_init_full(uart1, 115200, -1, -1);
     
     // GPIO setup
