@@ -73,17 +73,16 @@ int main()
         float t = ds18b20_read_temp();
         // Send telemetry in text format for easy debugging
         sprintf(uart_buffer, "%d,%.2f\r\n", counter, t);
-        uart_puts(UART_ID, uart_buffer);
         
         // Or send it in binary format with CRC8
         // Format: START + CMD_POSITION + LEN(8) + float temp + int counter + CRC8
         uint8_t telemetry[9];
         memcpy(&telemetry[0], &t, sizeof(float));
         memcpy(&telemetry[4], &counter, sizeof(int));
-        send_uart_response(CMD_STATUS, telemetry, 8);
-        
-        printf("Temperature: %.2f °C\n", t);
+        send_uart_command(CMD_STATUS, telemetry, 8);
+        uart_background_task();
+        //printf("Temperature: %.2f °C\n", t);
         counter++;
-        sleep_ms(1000);
+        sleep_ms(20000);
     }
 }
