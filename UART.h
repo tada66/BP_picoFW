@@ -13,12 +13,7 @@
 #define ACK_TIMEOUT_MS 1000
 #define MAX_RETRANSMITS 3
 #define MAX_PENDING_MSGS 2
-
-extern char cmd_buffer[CMD_BUFFER_SIZE];
-extern int cmd_buffer_index;
-
-extern uint8_t next_seq_num;
-extern uint8_t last_received_seq;
+#define MAX_MISSED_ACKS 5
 
 enum Commands {
     CMD_PING = 0x01,
@@ -45,8 +40,9 @@ typedef struct {
 } pending_message_t;
 
 uint8_t calculate_crc8(const uint8_t *data, size_t length);
-//void send_uart_response(uint8_t cmd_type, const uint8_t *data, size_t data_length);
 void on_uart_rx();
 void process_timeouts(void);
 void uart_background_task(void);
 bool send_uart_command(uint8_t cmd_type, const uint8_t *data, size_t data_length);
+void send_uart_message(pending_message_t *msg);
+void send_ack(uint8_t seq_num);

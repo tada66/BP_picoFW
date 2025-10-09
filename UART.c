@@ -25,30 +25,6 @@ uint8_t calculate_crc8(const uint8_t *data, size_t length) {
     return crc;
 }
 
-/*void send_uart_response(uint8_t cmd_type, const uint8_t *data, size_t data_length) {
-    // Command format: START(0xAA) + CMD_TYPE + LEN + DATA + CRC8
-    uint8_t seq_num = next_seq_num++;
-    uint8_t header[4] = {0xAA, cmd_type, seq_num, data_length};
-    uint8_t temp_buffer[256];
-    
-    memcpy(temp_buffer, header, 4);
-    if (data_length > 0 && data != NULL) {
-        memcpy(temp_buffer + 4, data, data_length);
-    }
-    
-    // Calculate CRC8 over the entire message (header + data)
-    uint8_t crc = calculate_crc8(temp_buffer, 4 + data_length);
-    
-    // Send the message over UART
-    uart_write_blocking(UART_ID, header, 4);
-    if (data_length > 0 && data != NULL) {
-        uart_write_blocking(UART_ID, data, data_length);
-    }
-    uart_putc(UART_ID, crc);
-    
-    printf("Sent response: CMD=0x%02X, SEQ=%d, LEN=%d, CRC=0x%02X\n", cmd_type, seq_num, data_length, crc);
-}*/
-
 bool send_uart_command(uint8_t cmd_type, const uint8_t *data, size_t data_length) {
     // Find an available slot
     int slot = -1;
@@ -76,39 +52,42 @@ bool send_uart_command(uint8_t cmd_type, const uint8_t *data, size_t data_length
     if (data != NULL && data_length > 0) {
         memcpy(msg->data, data, msg->data_length);
     }
-    
-    // Send the initial transmission
-    uint8_t header[4] = {0xAA, cmd_type, msg->seq_num, data_length};
-    uint8_t temp_buffer[256];
-    
-    memcpy(temp_buffer, header, 4);
-    if (data_length > 0 && data != NULL) {
-        memcpy(temp_buffer + 4, data, data_length);
-    }
-    
-    uint8_t crc = calculate_crc8(temp_buffer, 4 + data_length);
-    
-    uart_write_blocking(UART_ID, header, 4);
-    if (data_length > 0 && data != NULL) {
-        uart_write_blocking(UART_ID, data, data_length);
-    }
-    uart_putc(UART_ID, crc);
-    
-    printf("Sent command: CMD=0x%02X, SEQ=%d, LEN=%d, CRC=0x%02X\n", 
-           cmd_type, msg->seq_num, data_length, crc);
+    send_uart_message(msg);
     
     return true;
 }
 
+void send_uart_message(pending_message_t *msg) {
+    // Send the initial transmission
+    uint8_t header[4] = {0xAA, msg->cmd_type, msg->seq_num, msg->data_length};
+    uint8_t temp_buffer[256];
+    
+    memcpy(temp_buffer, header, 4);
+    if (msg->data_length > 0 && msg->data != NULL) {
+        memcpy(temp_buffer + 4, msg->data, msg->data_length);
+    }
+    
+    uint8_t crc = calculate_crc8(temp_buffer, 4 + msg->data_length);
+    
+    uart_write_blocking(UART_ID, header, 4);
+    if (msg->data_length > 0 && msg->data != NULL) {
+        uart_write_blocking(UART_ID, msg->data, msg->data_length);
+    }
+    uart_putc(UART_ID, crc);
+    
+    printf("Sent command: CMD=0x%02X, SEQ=%d, LEN=%d, CRC=0x%02X\n", 
+        msg->cmd_type, msg->seq_num, msg->data_length, crc);
+}
+
 // Process message timeouts and retransmissions
-void process_timeouts(void) {
+void process_timeouts() {
+    static int missed_acks = 0;
     absolute_time_t now = get_absolute_time();
     
     for (int i = 0; i < MAX_PENDING_MSGS; i++) {
         pending_message_t *msg = &pending_messages[i];
         
         if (msg->in_use) {
-            // Check if timed out
             if (absolute_time_diff_us(msg->sent_time, now) > (ACK_TIMEOUT_MS * 1000)) {
                 // Timed out - retry or fail
                 if (msg->retries < MAX_RETRANSMITS) {
@@ -116,22 +95,7 @@ void process_timeouts(void) {
                     msg->retries++;
                     msg->sent_time = now;
                     
-                    // Resend the message
-                    uint8_t header[4] = {0xAA, msg->cmd_type, msg->seq_num, msg->data_length};
-                    uint8_t temp_buffer[256];
-                    
-                    memcpy(temp_buffer, header, 4);
-                    if (msg->data_length > 0) {
-                        memcpy(temp_buffer + 4, msg->data, msg->data_length);
-                    }
-                    
-                    uint8_t crc = calculate_crc8(temp_buffer, 4 + msg->data_length);
-                    
-                    uart_write_blocking(UART_ID, header, 4);
-                    if (msg->data_length > 0) {
-                        uart_write_blocking(UART_ID, msg->data, msg->data_length);
-                    }
-                    uart_putc(UART_ID, crc);
+                    send_uart_message(msg);
                     
                     printf("RETRANSMIT attempt %d: CMD=0x%02X, SEQ=%d\n", 
                            msg->retries, msg->cmd_type, msg->seq_num);
@@ -140,13 +104,23 @@ void process_timeouts(void) {
                     printf("ERROR: Message failed after %d retries: CMD=0x%02X, SEQ=%d\n", 
                            MAX_RETRANSMITS, msg->cmd_type, msg->seq_num);
                     msg->in_use = false;
+
+                    missed_acks++;
+                    if (missed_acks >= MAX_MISSED_ACKS) {
+                        // TODO: implement a state machine with a startup state, to which the system will return upon no connection
+                        printf("CRITICAL ERROR: 5 consecutive messages lost, resetting communication state\n");
+                        // Reset all pending messages
+                        for (int j = 0; j < MAX_PENDING_MSGS; j++)
+                            pending_messages[j].in_use = false;
+                        last_received_seq = 0;
+                    }
                 }
             }
         }
     }
 }
 
-void uart_background_task(void) {
+void uart_background_task() {
     process_timeouts();
 }
 
