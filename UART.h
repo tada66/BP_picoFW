@@ -16,8 +16,7 @@
 #define MAX_MISSED_ACKS 5
 
 enum Commands {
-    CMD_PING = 0x01,
-    CMD_ACK = 0x02,
+    CMD_ACK = 0x01,
     CMD_MOVE_ABS = 0x10,
     CMD_TRACK = 0x11,
     CMD_PAUSE = 0x12,
@@ -28,14 +27,10 @@ enum Commands {
     CMD_ESTOPTRIG = 0x21
 };
 
-enum State {
-    STATE_READY_TO_CONNECT,
-    STATE_CONNECTED
-};
 
 // Message tracking structure
 typedef struct {
-    bool in_use;                 // Is this slot in use?
+    bool in_use;                 // Are we currently waiting for an ACK for this message?
     uint8_t seq_num;             // Sequence number of this message
     uint8_t cmd_type;            // Command type
     uint8_t data[64];            // Message data

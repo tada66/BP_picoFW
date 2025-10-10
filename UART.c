@@ -1,8 +1,7 @@
 #include "UART.h"
 
 uint8_t next_seq_num = 0;
-uint8_t last_received_seq = 0;
-int state = STATE_READY_TO_CONNECT;
+uint8_t last_received_seq = 0xFF; // Last received sequence number, initialized to 0xFF so first valid is 0
 
 pending_message_t pending_message;
 
@@ -34,10 +33,6 @@ uint8_t calculate_crc8(const uint8_t *data, size_t length) {
 
 // Send a command with tracking for ACK and retransmission
 bool send_uart_command(uint8_t cmd_type, const uint8_t *data, size_t data_length) {
-    if (state != STATE_CONNECTED && cmd_type != CMD_PING) {
-        printf("ERROR: Cannot send command 0x%02X, not connected! Only pings allowed to establish a connection!\n", cmd_type);
-        return false;
-    }
     if (pending_message.in_use) {
         printf("ERROR: Cannot send command 0x%02X, previous message still pending ACK!\n", cmd_type);
         return false;
@@ -111,7 +106,6 @@ void process_timeouts() {
                     // Reset all pending messages
                     pending_message.in_use = false;
                     last_received_seq = 0;
-                    state = STATE_READY_TO_CONNECT;
                 }
             }
         }
@@ -119,20 +113,7 @@ void process_timeouts() {
 }
 
 void uart_background_task() {
-    static absolute_time_t last_ping_time = {0};
-
-    switch (state){
-        case STATE_READY_TO_CONNECT:
-            absolute_time_t now = get_absolute_time();
-            if (absolute_time_diff_us(last_ping_time, now) > 5000000) { // Every 5 seconds
-                send_uart_command(CMD_PING, NULL, 0);
-                last_ping_time = now;
-            }
-            break;
-        case STATE_CONNECTED:
-            process_timeouts();
-            break;
-    }
+    process_timeouts();
 }
 
 void send_ack(uint8_t seq_num) {
@@ -157,12 +138,7 @@ void on_uart_rx()
 {
     static char cmd_buffer[CMD_BUFFER_SIZE];
     static int cmd_buffer_index = 0;
-    // START 0xAA
-    // CMD_TYPE
-    // SEQUENCE NUMBER
-    // DATA LENGTH
-    // DATA (variable length)
-    // CRC8 (calculated over CMD_TYPE, SEQUENCE NUMBER, DATA LENGTH, DATA)
+
     while (uart_is_readable(UART_ID)) {
         uint8_t c = uart_getc(UART_ID);
         if (cmd_buffer_index >= CMD_BUFFER_SIZE - 1) {
@@ -178,14 +154,12 @@ void on_uart_rx()
             uint8_t cmd_type = cmd_buffer[1];
             uint8_t seq_num = cmd_buffer[2];
             uint8_t data_length = cmd_buffer[3];
-            if (cmd_buffer_index == data_length + 5) { // DATA + START + CMD + SEQ + LEN + CHKSUM (crc8)
-                // Validate CRC8 is correct
+            if (cmd_buffer_index == data_length + 5) { // Whole command received (5 = DATA + START + CMD + SEQ + LEN + CHKSUM (crc8))
                 uint8_t received_crc = (uint8_t)cmd_buffer[cmd_buffer_index - 1];
                 uint8_t calculated_crc = calculate_crc8((uint8_t *)cmd_buffer, cmd_buffer_index - 1);
                 if (received_crc != calculated_crc) {
                     printf("ERROR: CRC8 mismatch! Received: 0x%02X, Calculated: 0x%02X\n", 
                            received_crc, calculated_crc);
-
                     // Try to resync by looking for next 0xAA
                     int i = 1;
                     while (i < cmd_buffer_index && cmd_buffer[i] != 0xAA) 
@@ -198,6 +172,7 @@ void on_uart_rx()
                     }
                     continue;
                 }
+
                 if(seq_num != (uint8_t)(last_received_seq + 1)) {
                     printf("Duplicate or out-of-order message SEQ=%d (last received SEQ=%d), ignoring\n", seq_num, last_received_seq);
                     cmd_buffer_index = 0; // Reset buffer index for next command
@@ -210,14 +185,7 @@ void on_uart_rx()
                     send_ack(seq_num);
                 }
                 switch (cmd_buffer[1]) {
-                    case CMD_PING:
-                        send_uart_command(CMD_PING, NULL, 0);
-                        break;
                     case CMD_ACK:
-                        if(state == STATE_READY_TO_CONNECT) {
-                            state = STATE_CONNECTED;
-                            printf("Connection established!\n");
-                        }
                         if (data_length >= 1) {
                             uint8_t acked_seq = cmd_buffer[4];  // First data byte
                             if (pending_message.in_use && pending_message.seq_num == acked_seq) {
@@ -231,6 +199,5 @@ void on_uart_rx()
                 cmd_buffer_index = 0; // Reset buffer index for next command
             }
         }
-
     }
 }
