@@ -1,11 +1,19 @@
 #include "UART.h"
 
-char cmd_buffer[CMD_BUFFER_SIZE];
-int cmd_buffer_index = 0;
 uint8_t next_seq_num = 0;
 uint8_t last_received_seq = 0;
+int state = STATE_READY_TO_CONNECT;
 
-pending_message_t pending_messages[MAX_PENDING_MSGS] = {0};
+pending_message_t pending_message;
+
+void uart_init_protocol(){
+    uart_init(UART_ID, BAUD_RATE);
+    gpio_set_function(UART_TX_PIN, GPIO_FUNC_UART);
+    gpio_set_function(UART_RX_PIN, GPIO_FUNC_UART);
+    irq_set_exclusive_handler(UART0_IRQ, on_uart_rx);
+    irq_set_enabled(UART0_IRQ, true);
+    uart_set_irq_enables(UART_ID, true, false);
+}
 
 uint8_t calculate_crc8(const uint8_t *data, size_t length) {
     uint8_t crc = 0xFF; // Initial value
@@ -21,38 +29,32 @@ uint8_t calculate_crc8(const uint8_t *data, size_t length) {
             crc &= 0xFF;  // Keep only the lower 8 bits
         }
     }
-    
     return crc;
 }
 
+// Send a command with tracking for ACK and retransmission
 bool send_uart_command(uint8_t cmd_type, const uint8_t *data, size_t data_length) {
-    // Find an available slot
-    int slot = -1;
-    for (int i = 0; i < MAX_PENDING_MSGS; i++) {
-        if (!pending_messages[i].in_use) {
-            slot = i;
-            break;
-        }
-    }
-    
-    if (slot < 0) {
-        printf("ERROR: No free slots for message tracking\n");
+    if (state != STATE_CONNECTED && cmd_type != CMD_PING) {
+        printf("ERROR: Cannot send command 0x%02X, not connected! Only pings allowed to establish a connection!\n", cmd_type);
         return false;
     }
-    
+    if (pending_message.in_use) {
+        printf("ERROR: Cannot send command 0x%02X, previous message still pending ACK!\n", cmd_type);
+        return false;
+    }
+
     // Prepare the message for tracking
-    pending_message_t *msg = &pending_messages[slot];
-    msg->in_use = true;
-    msg->seq_num = next_seq_num++;
-    msg->cmd_type = cmd_type;
-    msg->data_length = data_length > 64 ? 64 : data_length;
-    msg->sent_time = get_absolute_time();
-    msg->retries = 0;
+    pending_message.in_use = true;
+    pending_message.seq_num = next_seq_num++;
+    pending_message.cmd_type = cmd_type;
+    pending_message.data_length = data_length > 64 ? 64 : data_length;
+    pending_message.sent_time = get_absolute_time();
+    pending_message.retries = 0;
     
     if (data != NULL && data_length > 0) {
-        memcpy(msg->data, data, msg->data_length);
+        memcpy(pending_message.data, data, pending_message.data_length);
     }
-    send_uart_message(msg);
+    send_uart_message(&pending_message);
     
     return true;
 }
@@ -83,37 +85,33 @@ void send_uart_message(pending_message_t *msg) {
 void process_timeouts() {
     static int missed_acks = 0;
     absolute_time_t now = get_absolute_time();
-    
-    for (int i = 0; i < MAX_PENDING_MSGS; i++) {
-        pending_message_t *msg = &pending_messages[i];
-        
-        if (msg->in_use) {
-            if (absolute_time_diff_us(msg->sent_time, now) > (ACK_TIMEOUT_MS * 1000)) {
-                // Timed out - retry or fail
-                if (msg->retries < MAX_RETRANSMITS) {
-                    // Retransmit the message
-                    msg->retries++;
-                    msg->sent_time = now;
-                    
-                    send_uart_message(msg);
-                    
-                    printf("RETRANSMIT attempt %d: CMD=0x%02X, SEQ=%d\n", 
-                           msg->retries, msg->cmd_type, msg->seq_num);
-                } else {
-                    // Max retries reached - give up
-                    printf("ERROR: Message failed after %d retries: CMD=0x%02X, SEQ=%d\n", 
-                           MAX_RETRANSMITS, msg->cmd_type, msg->seq_num);
-                    msg->in_use = false;
+     
+    if (pending_message.in_use) {
+        if (absolute_time_diff_us(pending_message.sent_time, now) > (ACK_TIMEOUT_MS * 1000)) {
+            // Timed out - retry or fail
+            if (pending_message.retries < MAX_RETRANSMITS) {
+                // Retransmit the message
+                pending_message.retries++;
+                pending_message.sent_time = now;
+                
+                send_uart_message(&pending_message);
+                
+                printf("RETRANSMIT attempt %d: CMD=0x%02X, SEQ=%d\n", 
+                        pending_message.retries, pending_message.cmd_type, pending_message.seq_num);
+            } else {
+                // Max retries reached - give up
+                printf("ERROR: Message failed after %d retries: CMD=0x%02X, SEQ=%d\n", 
+                        MAX_RETRANSMITS, pending_message.cmd_type, pending_message.seq_num);
+                pending_message.in_use = false;
 
-                    missed_acks++;
-                    if (missed_acks >= MAX_MISSED_ACKS) {
-                        // TODO: implement a state machine with a startup state, to which the system will return upon no connection
-                        printf("CRITICAL ERROR: 5 consecutive messages lost, resetting communication state\n");
-                        // Reset all pending messages
-                        for (int j = 0; j < MAX_PENDING_MSGS; j++)
-                            pending_messages[j].in_use = false;
-                        last_received_seq = 0;
-                    }
+                missed_acks++;
+                if (missed_acks >= MAX_MISSED_ACKS) {
+                    // TODO: implement a state machine with a startup state, to which the system will return upon no connection
+                    printf("CRITICAL ERROR: 5 consecutive messages lost, resetting communication state\n");
+                    // Reset all pending messages
+                    pending_message.in_use = false;
+                    last_received_seq = 0;
+                    state = STATE_READY_TO_CONNECT;
                 }
             }
         }
@@ -121,7 +119,20 @@ void process_timeouts() {
 }
 
 void uart_background_task() {
-    process_timeouts();
+    static absolute_time_t last_ping_time = {0};
+
+    switch (state){
+        case STATE_READY_TO_CONNECT:
+            absolute_time_t now = get_absolute_time();
+            if (absolute_time_diff_us(last_ping_time, now) > 5000000) { // Every 5 seconds
+                send_uart_command(CMD_PING, NULL, 0);
+                last_ping_time = now;
+            }
+            break;
+        case STATE_CONNECTED:
+            process_timeouts();
+            break;
+    }
 }
 
 void send_ack(uint8_t seq_num) {
@@ -144,6 +155,8 @@ void send_ack(uint8_t seq_num) {
 
 void on_uart_rx()
 {
+    static char cmd_buffer[CMD_BUFFER_SIZE];
+    static int cmd_buffer_index = 0;
     // START 0xAA
     // CMD_TYPE
     // SEQUENCE NUMBER
@@ -201,14 +214,16 @@ void on_uart_rx()
                         send_uart_command(CMD_PING, NULL, 0);
                         break;
                     case CMD_ACK:
+                        if(state == STATE_READY_TO_CONNECT) {
+                            state = STATE_CONNECTED;
+                            printf("Connection established!\n");
+                        }
                         if (data_length >= 1) {
                             uint8_t acked_seq = cmd_buffer[4];  // First data byte
-                            for (int i = 0; i < MAX_PENDING_MSGS; i++) {
-                                if (pending_messages[i].in_use && pending_messages[i].seq_num == acked_seq) {
-                                    pending_messages[i].in_use = false;
-                                    printf("Message SEQ=%d successfully acknowledged\n", acked_seq);
-                                    break;
-                                }
+                            if (pending_message.in_use && pending_message.seq_num == acked_seq) {
+                                pending_message.in_use = false;
+                                printf("Message SEQ=%d successfully acknowledged\n", acked_seq);
+                                break;
                             }
                         }
                         break;

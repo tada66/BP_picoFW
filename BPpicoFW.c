@@ -1,16 +1,6 @@
-#include <stdio.h>
-#include <string.h>
-#include <stdbool.h>
+#include "BPpicoFW.h"
 
-#include "DS18B20.h"
-#include "PIN_ASSIGNMENTS.h"
-#include "UART.h"
-#include "pico/stdlib.h"
-#include "hardware/uart.h"
-#include "hardware/irq.h"
-#include "hardware/pwm.h"
 bool is_paused = false;
-
 
 void fan_set_speed(float duty_percent) {
     if (duty_percent < 0) duty_percent = 0;
@@ -55,12 +45,7 @@ int main()
     pwm_set_enabled(slice, true);
 
     // UART setup
-    uart_init(UART_ID, BAUD_RATE);
-    gpio_set_function(UART_TX_PIN, GPIO_FUNC_UART);
-    gpio_set_function(UART_RX_PIN, GPIO_FUNC_UART);
-    irq_set_exclusive_handler(UART0_IRQ, on_uart_rx);
-    irq_set_enabled(UART0_IRQ, true);
-    uart_set_irq_enables(UART_ID, true, false);
+    uart_init_protocol();
     printf("Initialization complete!\n");
 
     gpio_put(ONBOARD_LED_PIN, 1); // Turn on onboard LED to indicate ready
@@ -71,17 +56,11 @@ int main()
 
     while (1) {
         float t = ds18b20_read_temp();
-        // Send telemetry in text format for easy debugging
-        sprintf(uart_buffer, "%d,%.2f\r\n", counter, t);
-        
-        // Or send it in binary format with CRC8
-        // Format: START + CMD_POSITION + LEN(8) + float temp + int counter + CRC8
         uint8_t telemetry[9];
         memcpy(&telemetry[0], &t, sizeof(float));
         memcpy(&telemetry[4], &counter, sizeof(int));
         send_uart_command(CMD_STATUS, telemetry, 8);
         uart_background_task();
-        //printf("Temperature: %.2f °C\n", t);
         counter++;
         sleep_ms(20000);
     }

@@ -3,16 +3,16 @@
 #include <string.h>
 #include <stdio.h>  // For printf debugging
 #include "hardware/uart.h"
+#include "hardware/irq.h"
 #include "PIN_ASSIGNMENTS.h"
 #include "pico/time.h"
+#include "pico/stdlib.h"
 
 #define CRC8_POLYNOMIAL 0x07
 #define CMD_BUFFER_SIZE 128
-#define MAX_SEQ_DATA_LENGTH 256
 
 #define ACK_TIMEOUT_MS 1000
 #define MAX_RETRANSMITS 3
-#define MAX_PENDING_MSGS 2
 #define MAX_MISSED_ACKS 5
 
 enum Commands {
@@ -28,6 +28,11 @@ enum Commands {
     CMD_ESTOPTRIG = 0x21
 };
 
+enum State {
+    STATE_READY_TO_CONNECT,
+    STATE_CONNECTED
+};
+
 // Message tracking structure
 typedef struct {
     bool in_use;                 // Is this slot in use?
@@ -39,6 +44,7 @@ typedef struct {
     uint8_t retries;             // Number of retransmission attempts
 } pending_message_t;
 
+void uart_init_protocol();
 uint8_t calculate_crc8(const uint8_t *data, size_t length);
 void on_uart_rx();
 void process_timeouts(void);
