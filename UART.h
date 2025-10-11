@@ -2,6 +2,7 @@
 #include <stddef.h>
 #include <string.h>
 #include <stdio.h>  // For printf debugging
+#include <stdlib.h>
 #include "hardware/uart.h"
 #include "hardware/irq.h"
 #include "hardware/dma.h"
@@ -53,3 +54,5 @@ void send_uart_message(pending_message_t *msg);
 void send_ack(uint8_t seq_num);
 void on_uart_tx_dma_complete();
 uint8_t generate_msg_id();
+size_t cobsEncode(const void *data, size_t length, uint8_t *buffer);
+size_t cobsDecode(const uint8_t *buffer, size_t length, void *data);

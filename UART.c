@@ -1,9 +1,6 @@
 #include "UART.h"
 
-//TODO: Add COBS (https://www.embeddedrelated.com/showarticle/113.php) (or COBS-R https://pythonhosted.org/cobs/cobsr-intro.html) encoding to avoid 0xAA in data
-//      the receiver currently gets confused if 0xAA appears anywhere other than the start of a message
-//      this could also be solved by making the receiver more resistant to wild 0xAA bytes in the stream
-//      but COBS (or potentially SLIP) is a more professional solution
+//TODO: IMPORTANT! COBS code is from wikipedia, how to cite it?
 
 
 int missed_acks = 0;
@@ -89,6 +86,52 @@ uint8_t calculate_crc8(const uint8_t *data, size_t length) {
     return crc;
 }
 
+size_t cobsEncode(const void *data, size_t length, uint8_t *buffer)
+{
+	uint8_t *encode = buffer; // Encoded byte pointer
+	uint8_t *codep = encode++; // Output code pointer
+	uint8_t code = 1; // Code value
+
+	for (const uint8_t *byte = (const uint8_t *)data; length--; ++byte)
+	{
+		if (*byte) // Byte not zero, write it
+			*encode++ = *byte, ++code;
+
+		if (!*byte || code == 0xff) // Input is zero or block completed, restart
+		{
+			*codep = code, code = 1, codep = encode;
+			if (!*byte || length)
+				++encode;
+		}
+	}
+	*codep = code; // Write final code value
+
+	return (size_t)(encode - buffer);
+}
+
+size_t cobsDecode(const uint8_t *buffer, size_t length, void *data)
+{
+	const uint8_t *byte = buffer; // Encoded input byte pointer
+	uint8_t *decode = (uint8_t *)data; // Decoded output byte pointer
+
+	for (uint8_t code = 0xff, block = 0; byte < buffer + length; --block)
+	{
+		if (block) // Decode block byte
+			*decode++ = *byte++;
+		else
+		{
+			block = *byte++;             // Fetch the next block length
+			if (block && (code != 0xff)) // Encoded zero, write it unless it's delimiter.
+				*decode++ = 0;
+			code = block;
+			if (!code) // Delimiter code found
+				break;
+		}
+	}
+
+	return (size_t)(decode - (uint8_t *)data);
+}
+
 // Send a command with tracking for ACK and retransmission
 bool send_uart_command(uint8_t cmd_type, const uint8_t *data, size_t data_length) {
     if (pending_message.in_use) {
@@ -118,24 +161,30 @@ void send_uart_message(pending_message_t *msg) {
         tight_loop_contents();
     }
     
+    memset(tx_buffer, 0, sizeof(tx_buffer));
+    
     // Prepare the message in the TX buffer
-    uint8_t header[4] = {0xAA, msg->cmd_type, msg->msg_id, msg->data_length};
-    size_t tx_size = 0;
-    
-    memcpy(tx_buffer, header, 4);
-    tx_size += 4;
-    
+    uint8_t raw_buffer[TX_BUFFER_SIZE - 10];
+    size_t raw_buf_size = 0;
+
+    raw_buffer[raw_buf_size++] = msg->cmd_type;
+    raw_buffer[raw_buf_size++] = msg->msg_id;
+    raw_buffer[raw_buf_size++] = msg->data_length;
+
     if (msg->data_length > 0 && msg->data != NULL) {
-        memcpy(tx_buffer + tx_size, msg->data, msg->data_length);
-        tx_size += msg->data_length;
+        memcpy(raw_buffer + raw_buf_size, msg->data, msg->data_length);
+        raw_buf_size += msg->data_length;
     }
-    
-    uint8_t crc = calculate_crc8(tx_buffer, tx_size);
-    tx_buffer[tx_size++] = crc;
+
+    uint8_t crc = calculate_crc8(raw_buffer, raw_buf_size);
+    raw_buffer[raw_buf_size++] = crc;
+
+    size_t encoded_size = cobsEncode(raw_buffer, raw_buf_size, tx_buffer);
+    tx_buffer[encoded_size] = 0x00; // COBS delimiter
     
     // Set up and start DMA transfer
     dma_channel_set_read_addr(uart_tx_dma_channel, tx_buffer, false);
-    dma_channel_set_trans_count(uart_tx_dma_channel, tx_size, false);
+    dma_channel_set_trans_count(uart_tx_dma_channel, encoded_size + 1, false);
     
     // Mark TX as busy before starting DMA
     tx_busy = true;
@@ -143,7 +192,7 @@ void send_uart_message(pending_message_t *msg) {
     // Start the DMA transfer
     dma_channel_start(uart_tx_dma_channel);
 
-    printf("Sent command via DMA: CMD=0x%02X, ID=%d, LEN=%d, CRC=0x%02X\n", 
+    printf("Sent: CMD=0x%02X, ID=%d, LEN=%d, CRC=0x%02X\n", 
         msg->cmd_type, msg->msg_id, msg->data_length, crc);
 }
 
@@ -188,7 +237,7 @@ void uart_background_task() {
 
 void send_ack(uint8_t msg_id) {
     pending_message_t ack_msg;
-    ack_msg.in_use = false; // No tracking needed for ACKs
+    ack_msg.in_use = false;
     ack_msg.msg_id = generate_msg_id();
     ack_msg.cmd_type = CMD_ACK;
     ack_msg.data_length = 1;
@@ -196,79 +245,81 @@ void send_ack(uint8_t msg_id) {
     send_uart_message(&ack_msg);
 }
 
-// UART RX interrupt handler (unchanged, but with command handling expanded)
+// UART RX interrupt handler
 void on_uart_rx(void) {
-    static char cmd_buffer[CMD_BUFFER_SIZE];
-    static int cmd_buffer_index = 0;
-
+    static uint8_t incoming_buffer[CMD_BUFFER_SIZE];
+    static int incoming_buffer_index = 0;
+    
     while (uart_is_readable(UART_ID)) {
         uint8_t c = uart_getc(UART_ID);
-        if (cmd_buffer_index >= CMD_BUFFER_SIZE - 1) {
-            printf("ERROR: Command buffer overflow!\n");
-            cmd_buffer_index = 0;
-            continue;
-        }
-        if (cmd_buffer_index == 0 && c != (char)0xAA) { // Guarantee we start with 0xAA
-            continue;
-        }
-        cmd_buffer[cmd_buffer_index++] = c;
-        if (cmd_buffer_index >= 4) {
-            uint8_t cmd_type = cmd_buffer[1];
-            uint8_t msg_id = cmd_buffer[2];
-            uint8_t data_length = cmd_buffer[3];
-            if (cmd_buffer_index == data_length + 5) { // Whole command received (5 = DATA + START + CMD + ID + LEN + CHKSUM (crc8))
-                uint8_t received_crc = (uint8_t)cmd_buffer[cmd_buffer_index - 1];
-                uint8_t calculated_crc = calculate_crc8((uint8_t *)cmd_buffer, cmd_buffer_index - 1);
+        
+        if (c == 0) {
+            if (incoming_buffer_index > 0) {
+                uint8_t decoded[CMD_BUFFER_SIZE];
+                size_t decoded_size = cobsDecode(incoming_buffer, incoming_buffer_index, decoded);
+                
+                printf("COBS frame rec'd (%d bytes), decoded to %d bytes\n", 
+                       incoming_buffer_index, (int)decoded_size);
+                
+                if (decoded_size < 4) {  // CMD + ID + LEN + CRC minimum
+                    printf("ERROR: Decoded message too short: %d bytes\n", (int)decoded_size);
+                    continue;
+                }
+
+                uint8_t cmd_type = decoded[0];
+                uint8_t msg_id = decoded[1];
+                uint8_t data_length = decoded[2];
+                if (decoded_size != data_length + 4) {  // CMD + ID + LEN + DATA + CRC
+                    printf("ERROR: Decoded message has unexpected length: got %d, expected %d\n", 
+                            (int)decoded_size, data_length + 4);
+                    continue;
+                }
+
+                uint8_t received_crc = decoded[decoded_size - 1];
+                uint8_t calculated_crc = calculate_crc8(decoded, decoded_size - 1);
                 if (received_crc != calculated_crc) {
                     printf("ERROR: CRC8 mismatch! Received: 0x%02X, Calculated: 0x%02X\n", 
-                           received_crc, calculated_crc);
-                    // Try to resync by looking for next 0xAA
-                    int i = 1;
-                    while (i < cmd_buffer_index && cmd_buffer[i] != 0xAA) 
-                        i++;
-                    if (i < cmd_buffer_index) { // Cleanup
-                        memmove(cmd_buffer, &cmd_buffer[i], cmd_buffer_index - i);
-                        cmd_buffer_index -= i;
-                    } else {
-                        cmd_buffer_index = 0;
-                    }
+                            received_crc, calculated_crc);
                     continue;
                 }
 
                 if (msg_id == last_received_id) {
-                    printf("Duplicate message ID=%d (expected %d), ignoring\n", 
-                            msg_id, (uint8_t)(last_received_id + 1));
-                    cmd_buffer_index = 0;
+                    printf("Duplicate message ID=0x%02X, sending ACK only\n", msg_id);
+                    send_ack(msg_id);
                     continue;
                 }
+
+                // New message, process it
                 last_received_id = msg_id;
-                printf("Command received: CMD=0x%02X, ID=%d, Length=%d\n", cmd_type, msg_id, data_length);
-                if (cmd_type != CMD_ACK)
-                    send_ack(msg_id);
+                printf("Command received: CMD=0x%02X, ID=0x%02X, Length=%d\n", 
+                        cmd_type, msg_id, data_length);
                 
-                // Process commands
+                if (cmd_type != CMD_ACK) {
+                    send_ack(msg_id);
+                }
+                
+                // Process the command
                 switch (cmd_type) {
                     case CMD_ACK:
                         if (data_length >= 1) {
-                            uint8_t acked_id = cmd_buffer[4];  // First data byte
+                            uint8_t acked_id = decoded[3];  // First data byte
                             if (pending_message.in_use && pending_message.msg_id == acked_id) {
                                 pending_message.in_use = false;
-                                printf("Message ID=%d successfully acknowledged\n", acked_id);
+                                printf("MSG 0x%02X ACKed\n", acked_id);
                                 missed_acks = 0;
                             }
                         }
                         break;
-
-                    case CMD_PAUSE:
-                        printf("Received PAUSE command\n");
-                        break;
-                        
-                    case CMD_RESUME:
-                        printf("Received RESUME command\n");
-                        break;
                 }
-                
-                cmd_buffer_index = 0;
+            }
+            
+            incoming_buffer_index = 0;
+        } else {
+            if (incoming_buffer_index < CMD_BUFFER_SIZE - 1) {
+                incoming_buffer[incoming_buffer_index++] = c;
+            } else {
+                printf("ERROR: COBS buffer overflow, resetting\n");
+                incoming_buffer_index = 0;
             }
         }
     }
