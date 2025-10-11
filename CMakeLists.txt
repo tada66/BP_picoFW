@@ -48,7 +48,8 @@ pico_enable_stdio_usb(BPpicoFW 1)
 target_link_libraries(BPpicoFW
         pico_stdlib
         hardware_pwm 
-        hardware_uart)
+        hardware_uart
+        hardware_dma)
 
 # Add the standard include files to the build
 target_include_directories(BPpicoFW PRIVATE

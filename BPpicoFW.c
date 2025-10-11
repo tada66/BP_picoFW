@@ -62,6 +62,6 @@ int main()
         send_uart_command(CMD_STATUS, telemetry, 8);
         uart_background_task();
         counter++;
-        sleep_ms(20000);
+        sleep_ms(330);
     }
 }

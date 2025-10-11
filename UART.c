@@ -1,22 +1,77 @@
 #include "UART.h"
 
+//TODO: Add COBS (https://www.embeddedrelated.com/showarticle/113.php) (or COBS-R https://pythonhosted.org/cobs/cobsr-intro.html) encoding to avoid 0xAA in data
+//      the receiver currently gets confused if 0xAA appears anywhere other than the start of a message
+//      this could also be solved by making the receiver more resistant to wild 0xAA bytes in the stream
+//      but COBS (or potentially SLIP) is a more professional solution
+
+//TODO: Consider replacing sequence numbers with some message ID system that would just check if the new message isnt the same as the last one
+//      this would allow for duplicate message detection and also for ACKing specific messages.
+//      we never send more messages than one at a time without receiving an ACK so sequence numbers are unnecessary complexity
+//      as messages out of order are impossible in this system. IDs could just be randomly generated,
+//      or a hash of the message contents, we only care about them not being the same as the last one
+
+
+int missed_acks = 0;
 uint8_t next_seq_num = 0;
 uint8_t last_received_seq = 0xFF; // Last received sequence number, initialized to 0xFF so first valid is 0
 
 pending_message_t pending_message;
+uint8_t tx_buffer[TX_BUFFER_SIZE]; // Buffer for DMA transmission
+volatile bool tx_busy = false;     // Flag to indicate if DMA TX is in progress
 
-void uart_init_protocol(){
+int uart_tx_dma_channel = -1;      // DMA channel for UART TX
+
+void uart_init_protocol(void) {
+    // Initialize UART
     uart_init(UART_ID, BAUD_RATE);
     gpio_set_function(UART_TX_PIN, GPIO_FUNC_UART);
     gpio_set_function(UART_RX_PIN, GPIO_FUNC_UART);
     irq_set_exclusive_handler(UART0_IRQ, on_uart_rx);
     irq_set_enabled(UART0_IRQ, true);
     uart_set_irq_enables(UART_ID, true, false);
+
+    uart_tx_dma_channel = dma_claim_unused_channel(true);
+    
+    if (uart_tx_dma_channel < 0) {
+        printf("ERROR: Could not claim DMA channel for UART TX!\n");
+        return;
+    }
+
+    // Configure the DMA channel for UART TX
+    dma_channel_config dma_conf = dma_channel_get_default_config(uart_tx_dma_channel);
+    channel_config_set_transfer_data_size(&dma_conf, DMA_SIZE_8);           // 8-bit transfers
+    channel_config_set_read_increment(&dma_conf, true);                      // Increment read address
+    channel_config_set_write_increment(&dma_conf, false);                    // Don't increment write address
+    channel_config_set_dreq(&dma_conf, uart_get_dreq(UART_ID, true));       // UART TX DREQ as the DMA trigger
+    
+    // Set up the DMA channel
+    dma_channel_configure(
+        uart_tx_dma_channel,
+        &dma_conf,
+        &uart_get_hw(UART_ID)->dr,   // Write to UART data register
+        NULL,                        // Initial read address will be set later
+        0,                           // Initial transfer count will be set later
+        false                        // Don't start yet
+    );
+    
+    // Set up DMA completion interrupt
+    dma_channel_set_irq0_enabled(uart_tx_dma_channel, true);
+    irq_set_exclusive_handler(DMA_IRQ_0, on_uart_tx_dma_complete);
+    irq_set_enabled(DMA_IRQ_0, true);
+    
+    printf("UART protocol initialized with DMA for TX (channel %d)\n", uart_tx_dma_channel);
+}
+
+// DMA complete irq handler
+void on_uart_tx_dma_complete(void) {
+    dma_hw->ints0 = 1u << uart_tx_dma_channel;
+    tx_busy = false;
 }
 
 uint8_t calculate_crc8(const uint8_t *data, size_t length) {
-    uint8_t crc = 0xFF; // Initial value
-    
+    uint8_t crc = 0xFF;
+
     for (size_t i = 0; i < length; i++) {
         crc ^= data[i];
         for (uint8_t j = 0; j < 8; j++) {
@@ -55,30 +110,42 @@ bool send_uart_command(uint8_t cmd_type, const uint8_t *data, size_t data_length
 }
 
 void send_uart_message(pending_message_t *msg) {
-    // Send the initial transmission
+    // Wait until any previous DMA transfer is complete
+    while (tx_busy) {
+        tight_loop_contents();
+    }
+    
+    // Prepare the message in the TX buffer
     uint8_t header[4] = {0xAA, msg->cmd_type, msg->seq_num, msg->data_length};
-    uint8_t temp_buffer[256];
+    size_t tx_size = 0;
     
-    memcpy(temp_buffer, header, 4);
+    memcpy(tx_buffer, header, 4);
+    tx_size += 4;
+    
     if (msg->data_length > 0 && msg->data != NULL) {
-        memcpy(temp_buffer + 4, msg->data, msg->data_length);
+        memcpy(tx_buffer + tx_size, msg->data, msg->data_length);
+        tx_size += msg->data_length;
     }
     
-    uint8_t crc = calculate_crc8(temp_buffer, 4 + msg->data_length);
+    uint8_t crc = calculate_crc8(tx_buffer, tx_size);
+    tx_buffer[tx_size++] = crc;
     
-    uart_write_blocking(UART_ID, header, 4);
-    if (msg->data_length > 0 && msg->data != NULL) {
-        uart_write_blocking(UART_ID, msg->data, msg->data_length);
-    }
-    uart_putc(UART_ID, crc);
+    // Set up and start DMA transfer
+    dma_channel_set_read_addr(uart_tx_dma_channel, tx_buffer, false);
+    dma_channel_set_trans_count(uart_tx_dma_channel, tx_size, false);
     
-    printf("Sent command: CMD=0x%02X, SEQ=%d, LEN=%d, CRC=0x%02X\n", 
+    // Mark TX as busy before starting DMA
+    tx_busy = true;
+    
+    // Start the DMA transfer
+    dma_channel_start(uart_tx_dma_channel);
+    
+    printf("Sent command via DMA: CMD=0x%02X, SEQ=%d, LEN=%d, CRC=0x%02X\n", 
         msg->cmd_type, msg->seq_num, msg->data_length, crc);
 }
 
 // Process message timeouts and retransmissions
-void process_timeouts() {
-    static int missed_acks = 0;
+void process_timeouts(void) {
     absolute_time_t now = get_absolute_time();
      
     if (pending_message.in_use) {
@@ -101,11 +168,11 @@ void process_timeouts() {
 
                 missed_acks++;
                 if (missed_acks >= MAX_MISSED_ACKS) {
-                    // TODO: implement a state machine with a startup state, to which the system will return upon no connection
                     printf("CRITICAL ERROR: 5 consecutive messages lost, resetting communication state\n");
                     // Reset all pending messages
                     pending_message.in_use = false;
-                    last_received_seq = 0;
+                    last_received_seq = 0xFF;  // Reset to initial state
+                    missed_acks = 0;
                 }
             }
         }
@@ -117,25 +184,17 @@ void uart_background_task() {
 }
 
 void send_ack(uint8_t seq_num) {
-    // We don't need to track ACKs for retransmission since they're not ACKed themselves
-    uint8_t header[4] = {0xAA, CMD_ACK, next_seq_num++, 1};
-    uint8_t data[1] = {seq_num};
-    uint8_t temp_buffer[256];
-    
-    memcpy(temp_buffer, header, 4);
-    memcpy(temp_buffer + 4, data, 1);
-    
-    uint8_t crc = calculate_crc8(temp_buffer, 5);
-    
-    uart_write_blocking(UART_ID, header, 4);
-    uart_write_blocking(UART_ID, data, 1);
-    uart_putc(UART_ID, crc);
-    
-    printf("Sent ACK: SEQ=%d for message SEQ=%d\n", header[2], seq_num);
+    pending_message_t ack_msg;
+    ack_msg.in_use = false; // No tracking needed for ACKs
+    ack_msg.seq_num = seq_num;
+    ack_msg.cmd_type = CMD_ACK;
+    ack_msg.data_length = 1;
+    ack_msg.data[0] = seq_num; // Echo back the sequence number being acknowledged
+    send_uart_message(&ack_msg);
 }
 
-void on_uart_rx()
-{
+// UART RX interrupt handler (unchanged, but with command handling expanded)
+void on_uart_rx(void) {
     static char cmd_buffer[CMD_BUFFER_SIZE];
     static int cmd_buffer_index = 0;
 
@@ -173,30 +232,40 @@ void on_uart_rx()
                     continue;
                 }
 
-                if(seq_num != (uint8_t)(last_received_seq + 1)) {
-                    printf("Duplicate or out-of-order message SEQ=%d (last received SEQ=%d), ignoring\n", seq_num, last_received_seq);
-                    cmd_buffer_index = 0; // Reset buffer index for next command
+                if (seq_num != (uint8_t)(last_received_seq + 1)) {
+                    printf("Out-of-order message SEQ=%d (expected %d), ignoring\n", 
+                            seq_num, (uint8_t)(last_received_seq + 1));
+                    cmd_buffer_index = 0;
                     continue;
                 }
                 last_received_seq = seq_num;
-
                 printf("Command received: CMD=0x%02X, SEQ=%d, Length=%d\n", cmd_type, seq_num, data_length);
-                if(cmd_type != CMD_ACK) {
+                if (cmd_type != CMD_ACK)
                     send_ack(seq_num);
-                }
-                switch (cmd_buffer[1]) {
+                
+                // Process commands
+                switch (cmd_type) {
                     case CMD_ACK:
                         if (data_length >= 1) {
                             uint8_t acked_seq = cmd_buffer[4];  // First data byte
                             if (pending_message.in_use && pending_message.seq_num == acked_seq) {
                                 pending_message.in_use = false;
                                 printf("Message SEQ=%d successfully acknowledged\n", acked_seq);
-                                break;
+                                missed_acks = 0;
                             }
                         }
                         break;
+
+                    case CMD_PAUSE:
+                        printf("Received PAUSE command\n");
+                        break;
+                        
+                    case CMD_RESUME:
+                        printf("Received RESUME command\n");
+                        break;
                 }
-                cmd_buffer_index = 0; // Reset buffer index for next command
+                
+                cmd_buffer_index = 0;
             }
         }
     }
