@@ -35,7 +35,7 @@ enum Commands {
 // Message tracking structure
 typedef struct {
     bool in_use;                 // Are we currently waiting for an ACK for this message?
-    uint8_t seq_num;             // Sequence number of this message
+    uint8_t msg_id;              // Somewhat random message ID - must be different from last message as its used to detect duplicates
     uint8_t cmd_type;            // Command type
     uint8_t data[64];            // Message data
     size_t data_length;          // Length of data
@@ -52,3 +52,4 @@ bool send_uart_command(uint8_t cmd_type, const uint8_t *data, size_t data_length
 void send_uart_message(pending_message_t *msg);
 void send_ack(uint8_t seq_num);
 void on_uart_tx_dma_complete();
+uint8_t generate_msg_id();

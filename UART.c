@@ -5,16 +5,9 @@
 //      this could also be solved by making the receiver more resistant to wild 0xAA bytes in the stream
 //      but COBS (or potentially SLIP) is a more professional solution
 
-//TODO: Consider replacing sequence numbers with some message ID system that would just check if the new message isnt the same as the last one
-//      this would allow for duplicate message detection and also for ACKing specific messages.
-//      we never send more messages than one at a time without receiving an ACK so sequence numbers are unnecessary complexity
-//      as messages out of order are impossible in this system. IDs could just be randomly generated,
-//      or a hash of the message contents, we only care about them not being the same as the last one
-
 
 int missed_acks = 0;
-uint8_t next_seq_num = 0;
-uint8_t last_received_seq = 0xFF; // Last received sequence number, initialized to 0xFF so first valid is 0
+uint8_t last_received_id = 0x00; // Last received message ID, a new message must have a different ID from the last one, 0x00 is invalid
 
 pending_message_t pending_message;
 uint8_t tx_buffer[TX_BUFFER_SIZE]; // Buffer for DMA transmission
@@ -69,6 +62,16 @@ void on_uart_tx_dma_complete(void) {
     tx_busy = false;
 }
 
+uint8_t generate_msg_id() {
+    static uint8_t last_sent_id = 0x00; // Last sent message ID, initialized to invalid value
+    uint8_t new_id;
+    do {
+        new_id = (uint8_t)(rand() % 256);
+    } while (new_id == last_sent_id || new_id == 0x00); // Ensure it's different from last and not 0x00
+    last_sent_id = new_id;
+    return new_id;
+}
+
 uint8_t calculate_crc8(const uint8_t *data, size_t length) {
     uint8_t crc = 0xFF;
 
@@ -95,7 +98,7 @@ bool send_uart_command(uint8_t cmd_type, const uint8_t *data, size_t data_length
 
     // Prepare the message for tracking
     pending_message.in_use = true;
-    pending_message.seq_num = next_seq_num++;
+    pending_message.msg_id = generate_msg_id();
     pending_message.cmd_type = cmd_type;
     pending_message.data_length = data_length > 64 ? 64 : data_length;
     pending_message.sent_time = get_absolute_time();
@@ -116,7 +119,7 @@ void send_uart_message(pending_message_t *msg) {
     }
     
     // Prepare the message in the TX buffer
-    uint8_t header[4] = {0xAA, msg->cmd_type, msg->seq_num, msg->data_length};
+    uint8_t header[4] = {0xAA, msg->cmd_type, msg->msg_id, msg->data_length};
     size_t tx_size = 0;
     
     memcpy(tx_buffer, header, 4);
@@ -139,9 +142,9 @@ void send_uart_message(pending_message_t *msg) {
     
     // Start the DMA transfer
     dma_channel_start(uart_tx_dma_channel);
-    
-    printf("Sent command via DMA: CMD=0x%02X, SEQ=%d, LEN=%d, CRC=0x%02X\n", 
-        msg->cmd_type, msg->seq_num, msg->data_length, crc);
+
+    printf("Sent command via DMA: CMD=0x%02X, ID=%d, LEN=%d, CRC=0x%02X\n", 
+        msg->cmd_type, msg->msg_id, msg->data_length, crc);
 }
 
 // Process message timeouts and retransmissions
@@ -157,13 +160,13 @@ void process_timeouts(void) {
                 pending_message.sent_time = now;
                 
                 send_uart_message(&pending_message);
-                
-                printf("RETRANSMIT attempt %d: CMD=0x%02X, SEQ=%d\n", 
-                        pending_message.retries, pending_message.cmd_type, pending_message.seq_num);
+
+                printf("RETRANSMIT attempt %d: CMD=0x%02X, ID=%d\n", 
+                        pending_message.retries, pending_message.cmd_type, pending_message.msg_id);
             } else {
                 // Max retries reached - give up
-                printf("ERROR: Message failed after %d retries: CMD=0x%02X, SEQ=%d\n", 
-                        MAX_RETRANSMITS, pending_message.cmd_type, pending_message.seq_num);
+                printf("ERROR: Message failed after %d retries: CMD=0x%02X, ID=%d\n", 
+                        MAX_RETRANSMITS, pending_message.cmd_type, pending_message.msg_id);
                 pending_message.in_use = false;
 
                 missed_acks++;
@@ -171,7 +174,7 @@ void process_timeouts(void) {
                     printf("CRITICAL ERROR: 5 consecutive messages lost, resetting communication state\n");
                     // Reset all pending messages
                     pending_message.in_use = false;
-                    last_received_seq = 0xFF;  // Reset to initial state
+                    last_received_id = 0x00;
                     missed_acks = 0;
                 }
             }
@@ -183,13 +186,13 @@ void uart_background_task() {
     process_timeouts();
 }
 
-void send_ack(uint8_t seq_num) {
+void send_ack(uint8_t msg_id) {
     pending_message_t ack_msg;
     ack_msg.in_use = false; // No tracking needed for ACKs
-    ack_msg.seq_num = seq_num;
+    ack_msg.msg_id = generate_msg_id();
     ack_msg.cmd_type = CMD_ACK;
     ack_msg.data_length = 1;
-    ack_msg.data[0] = seq_num; // Echo back the sequence number being acknowledged
+    ack_msg.data[0] = msg_id; // Echo back the sequence number being acknowledged
     send_uart_message(&ack_msg);
 }
 
@@ -211,9 +214,9 @@ void on_uart_rx(void) {
         cmd_buffer[cmd_buffer_index++] = c;
         if (cmd_buffer_index >= 4) {
             uint8_t cmd_type = cmd_buffer[1];
-            uint8_t seq_num = cmd_buffer[2];
+            uint8_t msg_id = cmd_buffer[2];
             uint8_t data_length = cmd_buffer[3];
-            if (cmd_buffer_index == data_length + 5) { // Whole command received (5 = DATA + START + CMD + SEQ + LEN + CHKSUM (crc8))
+            if (cmd_buffer_index == data_length + 5) { // Whole command received (5 = DATA + START + CMD + ID + LEN + CHKSUM (crc8))
                 uint8_t received_crc = (uint8_t)cmd_buffer[cmd_buffer_index - 1];
                 uint8_t calculated_crc = calculate_crc8((uint8_t *)cmd_buffer, cmd_buffer_index - 1);
                 if (received_crc != calculated_crc) {
@@ -232,25 +235,25 @@ void on_uart_rx(void) {
                     continue;
                 }
 
-                if (seq_num != (uint8_t)(last_received_seq + 1)) {
-                    printf("Out-of-order message SEQ=%d (expected %d), ignoring\n", 
-                            seq_num, (uint8_t)(last_received_seq + 1));
+                if (msg_id == last_received_id) {
+                    printf("Duplicate message ID=%d (expected %d), ignoring\n", 
+                            msg_id, (uint8_t)(last_received_id + 1));
                     cmd_buffer_index = 0;
                     continue;
                 }
-                last_received_seq = seq_num;
-                printf("Command received: CMD=0x%02X, SEQ=%d, Length=%d\n", cmd_type, seq_num, data_length);
+                last_received_id = msg_id;
+                printf("Command received: CMD=0x%02X, ID=%d, Length=%d\n", cmd_type, msg_id, data_length);
                 if (cmd_type != CMD_ACK)
-                    send_ack(seq_num);
+                    send_ack(msg_id);
                 
                 // Process commands
                 switch (cmd_type) {
                     case CMD_ACK:
                         if (data_length >= 1) {
-                            uint8_t acked_seq = cmd_buffer[4];  // First data byte
-                            if (pending_message.in_use && pending_message.seq_num == acked_seq) {
+                            uint8_t acked_id = cmd_buffer[4];  // First data byte
+                            if (pending_message.in_use && pending_message.msg_id == acked_id) {
                                 pending_message.in_use = false;
-                                printf("Message SEQ=%d successfully acknowledged\n", acked_seq);
+                                printf("Message ID=%d successfully acknowledged\n", acked_id);
                                 missed_acks = 0;
                             }
                         }
