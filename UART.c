@@ -192,7 +192,7 @@ void send_uart_message(pending_message_t *msg) {
     // Start the DMA transfer
     dma_channel_start(uart_tx_dma_channel);
 
-    printf("Sent: CMD=0x%02X, ID=%d, LEN=%d, CRC=0x%02X\n", 
+    printf("Sent: CMD=0x%02X, ID=0x%02X, LEN=%d, CRC=0x%02X\n", 
         msg->cmd_type, msg->msg_id, msg->data_length, crc);
 }
 
@@ -210,11 +210,11 @@ void process_timeouts(void) {
                 
                 send_uart_message(&pending_message);
 
-                printf("RETRANSMIT attempt %d: CMD=0x%02X, ID=%d\n", 
+                printf("RETRANSMIT attempt %d: CMD=0x%02X, ID=0x%02X\n", 
                         pending_message.retries, pending_message.cmd_type, pending_message.msg_id);
             } else {
                 // Max retries reached - give up
-                printf("ERROR: Message failed after %d retries: CMD=0x%02X, ID=%d\n", 
+                printf("ERROR: Message failed after %d retries: CMD=0x%02X, ID=0x%02X\n", 
                         MAX_RETRANSMITS, pending_message.cmd_type, pending_message.msg_id);
                 pending_message.in_use = false;
 
