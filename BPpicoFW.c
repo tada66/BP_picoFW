@@ -14,6 +14,7 @@ void fan_set_speed(float duty_percent) {
 
 int main()
 {
+
     stdio_init_all();
     
     // Configure stdio to use USB only, not UART
@@ -23,15 +24,7 @@ int main()
     stdio_uart_init_full(uart1, 115200, -1, -1);
     
     // GPIO setup
-    gpio_init(Y_STEP_PIN); gpio_set_dir(Y_STEP_PIN, GPIO_OUT);
-    gpio_init(Y_DIR_PIN); gpio_set_dir(Y_DIR_PIN, GPIO_OUT);
-    gpio_init(X_STEP_PIN); gpio_set_dir(X_STEP_PIN, GPIO_OUT);
-    gpio_init(X_DIR_PIN); gpio_set_dir(X_DIR_PIN, GPIO_OUT);
-    gpio_init(X_DIR_PIN_INV); gpio_set_dir(X_DIR_PIN_INV, GPIO_OUT);
-    gpio_init(Z_STEP_PIN); gpio_set_dir(Z_STEP_PIN, GPIO_OUT);
-    gpio_init(Z_DIR_PIN); gpio_set_dir(Z_DIR_PIN, GPIO_OUT);
-    gpio_init(EN_SENSE_PIN); gpio_set_dir(EN_SENSE_PIN, GPIO_IN);
-    gpio_init(EN_PIN); gpio_set_dir(EN_PIN, GPIO_OUT);
+    stepper_init();
     gpio_init(TEMP_SENSE_PIN); gpio_set_dir(TEMP_SENSE_PIN, GPIO_OUT);
     gpio_put(TEMP_SENSE_PIN, 1);
     gpio_init(FAN_PWM_PIN); gpio_set_dir(FAN_PWM_PIN, GPIO_OUT);
@@ -49,11 +42,12 @@ int main()
     printf("Initialization complete!\n");
 
     gpio_put(ONBOARD_LED_PIN, 1); // Turn on onboard LED to indicate ready
-    gpio_put(EN_PIN, 0);
+    sleep_ms(4000);
+    gpio_put(ONBOARD_LED_PIN, 0);
 
     int counter = 0;
     char uart_buffer[64];
-
+    /*
     while (1) {
         float t = ds18b20_read_temp();
         uint8_t telemetry[9];
@@ -62,6 +56,20 @@ int main()
         send_uart_command(CMD_STATUS, telemetry, 8);
         uart_background_task();
         counter++;
-        sleep_ms(330);
+        sleep_ms(20000);
+    }*/
+    while(1){
+        sleep_ms(4000);
+        gpio_put(Y_DIR_PIN, 0);
+        gpio_put(Y_STEP_PIN, 0);
+        gpio_put(ONBOARD_LED_PIN, 0);
+        sleep_ms(4000);
+        gpio_put(Y_DIR_PIN, 1);
+        gpio_put(Y_STEP_PIN, 1);
+        gpio_put(ONBOARD_LED_PIN, 1);
     }
+    stepper_set_enable(true);
+    gpio_put(ONBOARD_LED_PIN, 1);
+    sleep_ms(1000);
+    stepper_test_move();
 }

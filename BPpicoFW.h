@@ -5,6 +5,8 @@
 #include "DS18B20.h"
 #include "PIN_ASSIGNMENTS.h"
 #include "UART.h"
+#include "STEPPER.h"
+
 #include "pico/stdlib.h"
 #include "hardware/uart.h"
 #include "hardware/irq.h"
