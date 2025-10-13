@@ -12,8 +12,14 @@ volatile bool tx_busy = false;     // Flag to indicate if DMA TX is in progress
 
 int uart_tx_dma_channel = -1;      // DMA channel for UART TX
 
+response_message_t response_queue[MAX_RESPONSES];
+
 void uart_init_protocol(void) {
-    // Initialize UART
+
+    for (int i = 0; i < MAX_RESPONSES; i++) {
+        response_queue[i].ready = false;
+    }
+
     uart_init(UART_ID, BAUD_RATE);
     gpio_set_function(UART_TX_PIN, GPIO_FUNC_UART);
     gpio_set_function(UART_RX_PIN, GPIO_FUNC_UART);
@@ -183,8 +189,8 @@ void send_uart_message(pending_message_t *msg) {
     tx_buffer[encoded_size] = 0x00; // COBS delimiter
     
     // Set up and start DMA transfer
-    dma_channel_set_read_addr(uart_tx_dma_channel, tx_buffer, false);
-    dma_channel_set_trans_count(uart_tx_dma_channel, encoded_size + 1, false);
+    dma_channel_set_read_addr(uart_tx_dma_channel, tx_buffer, true);
+    dma_channel_set_trans_count(uart_tx_dma_channel, encoded_size + 1, true);
     
     // Mark TX as busy before starting DMA
     tx_busy = true;
@@ -233,10 +239,39 @@ void process_timeouts(void) {
 
 void uart_background_task() {
     process_timeouts();
+    process_responses();
+}
+
+void queue_response(uint8_t cmd_type, const uint8_t *data, size_t data_length) {
+    for (int i = 0; i < MAX_RESPONSES; i++) {
+        if (!response_queue[i].ready) {
+            // Found an empty slot
+            response_queue[i].command = cmd_type;
+            response_queue[i].data_length = data_length > 16 ? 16 : data_length;
+            memcpy(response_queue[i].data, data, response_queue[i].data_length);
+            response_queue[i].ready = true;
+            return;
+        }
+    }
+    printf("ERROR: Response queue full, message dropped\n");
+}
+
+void process_responses(void) {
+    for (int i = 0; i < MAX_RESPONSES; i++) {
+        if (response_queue[i].ready) {
+            if (pending_message.in_use) {
+                continue;
+            }
+            send_uart_command(response_queue[i].command, 
+                             response_queue[i].data, 
+                             response_queue[i].data_length);
+            response_queue[i].ready = false;
+        }
+    }
 }
 
 void send_ack(uint8_t msg_id) {
-    pending_message_t ack_msg;
+    static pending_message_t ack_msg;
     ack_msg.in_use = false;
     ack_msg.msg_id = generate_msg_id();
     ack_msg.cmd_type = CMD_ACK;
@@ -308,6 +343,57 @@ void on_uart_rx(void) {
                                 printf("MSG 0x%02X ACKed\n", acked_id);
                                 missed_acks = 0;
                             }
+                        }
+                        break;
+                    case CMD_PAUSE:
+                        stepper_pause();
+                        break;
+                    case CMD_RESUME:
+                        stepper_resume();
+                        break;
+                    case CMD_MOVE_STATIC:
+                        if (data_length >= 5) {
+                            uint8_t axis = decoded[3];
+                            int32_t position;
+                            memcpy(&position, &decoded[4], sizeof(int32_t));
+                            stepper_queue_static_move(axis, position);
+                        } else {
+                            printf("ERROR: CMD_MOVE_STATIC requires at least 5 bytes of data\n");
+                        }
+                        break;
+                    case CMD_MOVE_TRACKING:
+                        if (data_length >= 12) { // 3 floats (4 bytes each)
+                            float x_rate, y_rate, z_rate;
+                            
+                            memcpy(&x_rate, &decoded[3], sizeof(float));
+                            memcpy(&y_rate, &decoded[7], sizeof(float));
+                            memcpy(&z_rate, &decoded[11], sizeof(float));
+                            
+                            printf("Received TRACK command: X=%.2f, Y=%.2f, Z=%.2f arcsec/sec\n", 
+                                x_rate, y_rate, z_rate);
+                                
+                            stepper_start_tracking(x_rate, y_rate, z_rate);
+                        } else {
+                            printf("ERROR: TRACK command requires 12 data bytes\n");
+                        }
+                        break;
+                    case CMD_GETPOS:
+                        if (data_length >= 1) {
+                            uint8_t axis = decoded[3];
+                            
+                            // Create a dummy response with the requested axis
+                            // and a fixed position value (123456 for testing)
+                            uint8_t response[5];
+                            response[0] = axis;
+                            
+                            int32_t position = stepper_get_position_arcsec(axis);
+                            memcpy(&response[1], &position, sizeof(position));
+                            
+                            // Send the response
+                            printf("Sending position for axis %d: %d\n", axis, position);
+                            queue_response(CMD_POSITION, response, 5);
+                        } else {
+                            printf("Error: CMD_GETPOS needs at least 1 data byte\n");
                         }
                         break;
                 }

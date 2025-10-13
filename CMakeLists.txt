@@ -49,7 +49,9 @@ target_link_libraries(BPpicoFW
         pico_stdlib
         hardware_pwm 
         hardware_uart
-        hardware_dma)
+        hardware_dma
+        pico_multicore
+        )
 
 # Add the standard include files to the build
 target_include_directories(BPpicoFW PRIVATE

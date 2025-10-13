@@ -24,7 +24,6 @@ int main()
     stdio_uart_init_full(uart1, 115200, -1, -1);
     
     // GPIO setup
-    stepper_init();
     gpio_init(TEMP_SENSE_PIN); gpio_set_dir(TEMP_SENSE_PIN, GPIO_OUT);
     gpio_put(TEMP_SENSE_PIN, 1);
     gpio_init(FAN_PWM_PIN); gpio_set_dir(FAN_PWM_PIN, GPIO_OUT);
@@ -36,6 +35,11 @@ int main()
     pwm_set_wrap(slice, 65535); // 16-bit resolution
     pwm_set_clkdiv(slice, 76.3f); // divisor for ~25 kHz, lower frequencies cause the fan to emit audible high pitched noise
     pwm_set_enabled(slice, true);
+    fan_set_speed(100);
+
+    sleep_ms(5000); // Sleep for me to allow time to connect to USB serial console
+    // Initialize stepper motor GPIOs and launch process in a separate core
+    stepper_init();
 
     // UART setup
     uart_init_protocol();
@@ -47,29 +51,16 @@ int main()
 
     int counter = 0;
     char uart_buffer[64];
-    /*
+    
     while (1) {
         float t = ds18b20_read_temp();
         uint8_t telemetry[9];
         memcpy(&telemetry[0], &t, sizeof(float));
         memcpy(&telemetry[4], &counter, sizeof(int));
-        send_uart_command(CMD_STATUS, telemetry, 8);
+        if(counter % 50 == 0)
+            queue_response(CMD_STATUS, telemetry, 8);
         uart_background_task();
         counter++;
-        sleep_ms(20000);
-    }*/
-    while(1){
-        sleep_ms(4000);
-        gpio_put(Y_DIR_PIN, 0);
-        gpio_put(Y_STEP_PIN, 0);
-        gpio_put(ONBOARD_LED_PIN, 0);
-        sleep_ms(4000);
-        gpio_put(Y_DIR_PIN, 1);
-        gpio_put(Y_STEP_PIN, 1);
-        gpio_put(ONBOARD_LED_PIN, 1);
+        sleep_ms(200);
     }
-    stepper_set_enable(true);
-    gpio_put(ONBOARD_LED_PIN, 1);
-    sleep_ms(1000);
-    stepper_test_move();
 }

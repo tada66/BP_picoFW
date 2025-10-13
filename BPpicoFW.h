@@ -1,3 +1,6 @@
+#ifndef BPPICOFW_H
+#define BPPICOFW_H
+
 #include <stdio.h>
 #include <string.h>
 #include <stdbool.h>
@@ -14,3 +17,5 @@
 
 void fan_set_speed(float duty_percent);
 int main();
+
+#endif // BPPICOFW_H
