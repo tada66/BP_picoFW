@@ -7,6 +7,7 @@
 #include "pico/stdlib.h"
 #include "pico/multicore.h"
 #include "pico/sync.h"
+#include "DEBUGPRINT.h"
 
 #define X_STEPPER_GEAR_RATIO 28.5714285714f // 400:14
 #define Y_STEPPER_GEAR_RATIO 23.5714285714f // 330:14
