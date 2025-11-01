@@ -1,11 +1,8 @@
 #include "STEPPER.h"
-#include "hardware/timer.h"
 
-// Global state variables
 bool stepper_enabled = false;
 volatile bool stepper_paused = false;
 
-// Positional tracking
 volatile int32_t x_position_steps = 0;
 volatile int32_t y_position_steps = 0;
 volatile int32_t z_position_steps = 0;
@@ -19,12 +16,10 @@ volatile stepper_command_t axis_commands[NUM_AXES] = {
 
 volatile tracking_state_t tracking_state = {false, {0.0f, 0.0f, 0.0f}, {0, 0, 0}};
 
-// Helper functions for step/arcsecond conversions
 int32_t arcseconds_to_steps(int32_t arcseconds, float gear_ratio) {
     // 1296000 = 360° * 60 * 60 (arcseconds in a full circle)
     float steps_per_arcsecond = ((float)STEPS_PER_REV * MICROSTEPPING * gear_ratio) / 1296000.0f;
     
-    // Use proper rounding instead of truncation
     float exact_steps = arcseconds * steps_per_arcsecond;
     return (int32_t)(exact_steps >= 0 ? exact_steps + 0.5f : exact_steps - 0.5f);
 }
@@ -32,7 +27,6 @@ int32_t arcseconds_to_steps(int32_t arcseconds, float gear_ratio) {
 int32_t steps_to_arcseconds(int32_t steps, float gear_ratio) {
     float arcseconds_per_step = 1296000.0f / ((float)STEPS_PER_REV * MICROSTEPPING * gear_ratio);
     
-    // Use proper rounding instead of truncation
     float exact_arcseconds = steps * arcseconds_per_step;
     return (int32_t)(exact_arcseconds >= 0 ? exact_arcseconds + 0.5f : exact_arcseconds - 0.5f);
 }
@@ -87,6 +81,10 @@ void stepper_init_pins() {
     gpio_put(X_STEP_PIN, 0);
     gpio_put(X_DIR_PIN, 0);
     gpio_put(X_DIR_PIN_INV, 1); // REMEMBER: second X axis stepper must be inverted
+                                // this could be differently by actually letting these drivers not only share a step pin
+                                // but also a direction pin, and swapping the wires of a single coil on the second motor
+                                // ie swapping the red and blue wires, but since we already have a gpio for each drivers 
+                                // dir pin we can just invert in software and have all the colors be the same way 
     gpio_put(Y_STEP_PIN, 0);
     gpio_put(Y_DIR_PIN, 0);
     gpio_put(Z_STEP_PIN, 0);
@@ -129,7 +127,6 @@ void stepper_queue_static_move(uint8_t axis, int32_t position_arcsec) {
         return;
     }
     
-    // Stop tracking mode if active
     if (tracking_state.tracking_active) {
         DEBUG_PRINT("Stopping tracking mode to execute static move\n");
         tracking_state.tracking_active = false;
@@ -145,7 +142,6 @@ void stepper_queue_static_move(uint8_t axis, int32_t position_arcsec) {
 }
 
 void stepper_stop_all_moves() {
-    // Stop all axis movements
     for (uint8_t axis = 0; axis < NUM_AXES; axis++) {
         axis_commands[axis].valid = false;
     }
@@ -158,7 +154,6 @@ void stepper_start_tracking(float x_rate_arcsec, float y_rate_arcsec, float z_ra
         return;
     }
     
-    // Stop all current movement commands
     stepper_stop_all_moves();
     
     // Set up tracking state
@@ -210,19 +205,13 @@ void stepper_core1_entry() {
     // Per-axis timing variables for multi-axis support
     static absolute_time_t last_step_time[NUM_AXES] = {0};
     static absolute_time_t last_dir_change_time[NUM_AXES] = {0};
-    
-    // Fast stepping: 1ms interval = 1kHz step rate (very fast but safe)
-    static const uint32_t STEP_INTERVAL_MS = 1;  // 1ms = 1000 steps/sec
-    
-    // Direction setup time: 1μs (50x the required 20ns for safety)
-    static const uint32_t DIR_SETUP_TIME_US = 1;
 
     // Direction tracking per axis
     static bool last_direction[NUM_AXES] = {false, false, false};
     
     while (true) {
         if (!stepper_enabled || stepper_paused) {
-            sleep_ms(10);
+            sleep_ms(IDLE_SLEEP_MS);
             continue;
         }
         
@@ -248,7 +237,7 @@ void stepper_core1_entry() {
                     // Check if it's time for a step
                     if ((current_time - tracking_state.last_step_time[axis]) >= step_interval_us) {
                         gpio_put(get_step_pin(axis), 1);
-                        sleep_us(1);  // Changed from 5 to 1μs for consistency
+                        sleep_us(TRACKING_STEP_PULSE_US);  // Use defined constant
                         gpio_put(get_step_pin(axis), 0);
                         
                         // Update position
@@ -292,13 +281,11 @@ void stepper_core1_entry() {
                 // Calculate absolute steps needed
                 int32_t steps = direction ? position_diff : -position_diff;
                 
-                // Set direction with proper timing for TMC2209
                 if (last_direction[axis] != direction) {
                     gpio_put(get_dir_pin(axis), direction);
                     
-                    // FIXED: X-axis has two motors, one must be inverted
                     if (axis == AXIS_X) {
-                        gpio_put(X_DIR_PIN_INV, !direction);  // Inverted direction for second X motor
+                        gpio_put(X_DIR_PIN_INV, !direction);
                     }
                     
                     last_direction[axis] = direction;
@@ -310,9 +297,8 @@ void stepper_core1_entry() {
                 bool step_interval_ready = absolute_time_diff_us(last_step_time[axis], now) >= (STEP_INTERVAL_MS * 1000);
                 
                 if (steps > 0 && direction_setup_complete && step_interval_ready) {
-                    // Optimized step pulse timing for TMC2209
                     gpio_put(get_step_pin(axis), 1);
-                    sleep_us(1);  // 1μs high pulse (10x the required 100ns)
+                    sleep_us(STEP_PULSE_WIDTH_US);
                     gpio_put(get_step_pin(axis), 0);
                     
                     // Update position in the correct direction
@@ -325,7 +311,6 @@ void stepper_core1_entry() {
                     // Update last step time for this axis
                     last_step_time[axis] = now;
                     
-                    // Print progress occasionally (per axis)
                     static int step_counter[NUM_AXES] = {0};
                     if (++step_counter[axis] % 1000 == 0) {
                         DEBUG_PRINT("Axis %d: %ld steps remaining\n", axis, steps - 1);
@@ -338,12 +323,10 @@ void stepper_core1_entry() {
             }
         }
         
-        // If no active movement, sleep briefly to avoid busy-waiting
         if (!active_movement) {
-            sleep_ms(1);
+            sleep_ms(INACTIVE_SLEEP_MS);
         } else {
-            // Small delay to prevent overwhelming the system
-            sleep_us(50);  // Reduced delay since we're handling multiple axes
+            sleep_us(ACTIVE_SLEEP_US);
         }
     }
 }

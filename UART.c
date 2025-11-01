@@ -1,7 +1,5 @@
 #include "UART.h"
 
-//TODO: IMPORTANT! COBS code is from wikipedia, how to cite it?
-
 
 int missed_acks = 0;
 uint8_t last_received_id = 0x00; // Last received message ID, a new message must have a different ID from the last one, 0x00 is invalid
@@ -92,6 +90,18 @@ uint8_t calculate_crc8(const uint8_t *data, size_t length) {
     return crc;
 }
 
+
+/*
+ * COBS (Consistent Overhead Byte Stuffing) Implementation
+ * 
+ * Source: Wikipedia - "Consistent Overhead Byte Stuffing"
+ * URL: https://en.wikipedia.org/wiki/Consistent_Overhead_Byte_Stuffing
+ * 
+ * Functions cobsEncode() and cobsDecode() are based on the reference
+ * implementation provided in the Wikipedia article.
+ * 
+ * Last accessed: 2nd November 2025
+ */
 size_t cobsEncode(const void *data, size_t length, uint8_t *buffer)
 {
 	uint8_t *encode = buffer; // Encoded byte pointer

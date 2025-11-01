@@ -4,7 +4,6 @@
 #include <stdint.h>
 #include <stddef.h>
 #include <string.h>
-#include <stdio.h>  // For printf debugging
 #include <stdlib.h>
 #include "hardware/uart.h"
 #include "hardware/irq.h"
@@ -18,8 +17,8 @@
 #define CRC8_POLYNOMIAL 0x07
 #define CMD_BUFFER_SIZE 128
 #define TX_BUFFER_SIZE 256  // Buffer for DMA transmission
-#define MAX_RESPONSES 4
 
+#define MAX_RESPONSES 4
 #define ACK_TIMEOUT_MS 1000
 #define MAX_RETRANSMITS 3
 #define MAX_MISSED_ACKS 2

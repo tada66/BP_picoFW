@@ -34,9 +34,12 @@ int main()
     pwm_set_wrap(slice, 65535); // 16-bit resolution
     pwm_set_clkdiv(slice, 76.3f); // divisor for ~25 kHz, lower frequencies cause the fan to emit audible high pitched noise
     pwm_set_enabled(slice, true);
-    fan_set_speed(100);
+    fan_set_speed(100); // the fans are pretty slow, just let them be at full speed
 
-    sleep_ms(5000); // Sleep for me to allow time to connect to USB serial console
+    sleep_ms(5000); // The stepper drivers do like to power up with some delay
+                    // haven't had any issues with this removed, however, some people on the internet reported issues 
+                    // and since this happens only once at startup, well leave it here for safety
+
     // Initialize stepper motor GPIOs and launch process in a separate core
     stepper_init();
 
@@ -48,7 +51,7 @@ int main()
     sleep_ms(4000);
     gpio_put(ONBOARD_LED_PIN, 0);
 
-    int counter = 0;
+    uint32_t counter = 0;
     uint32_t last_telemetry_time = time_us_32();
     const uint32_t TELEMETRY_INTERVAL_US = 10000000; // 10 seconds
 

@@ -2,19 +2,28 @@
 #define STEPPER_H
 
 #include "PIN_ASSIGNMENTS.h"
-#include <stdio.h>  // For printf debugging
+#include "DEBUGPRINT.h"
 #include <math.h>
 #include "pico/stdlib.h"
 #include "pico/multicore.h"
 #include "pico/sync.h"
-#include "DEBUGPRINT.h"
+#include "hardware/timer.h"
 
 #define X_STEPPER_GEAR_RATIO 28.5714285714f // 400:14
 #define Y_STEPPER_GEAR_RATIO 23.5714285714f // 330:14
 #define Z_STEPPER_GEAR_RATIO 30.0f          // 420:14
 
-#define STEPS_PER_REV 400
+#define STEPS_PER_REV 400 // 0.9deg stepper motor
 #define MICROSTEPPING 16
+
+// Timing constants for stepper control
+#define STEP_INTERVAL_MS 1          // 1ms = 1000 steps/sec
+#define DIR_SETUP_TIME_US 1         // 1μs direction setup time for TMC2209
+#define STEP_PULSE_WIDTH_US 1       // 1μs step pulse width
+#define TRACKING_STEP_PULSE_US 1    // 1μs step pulse for tracking mode
+#define IDLE_SLEEP_MS 10            // Sleep when steppers disabled/paused
+#define ACTIVE_SLEEP_US 50          // Sleep between active movement cycles
+#define INACTIVE_SLEEP_MS 1         // Sleep when no movement active
 
 enum {
     AXIS_X,
