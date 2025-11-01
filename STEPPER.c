@@ -23,12 +23,18 @@ volatile tracking_state_t tracking_state = {false, {0.0f, 0.0f, 0.0f}, {0, 0, 0}
 int32_t arcseconds_to_steps(int32_t arcseconds, float gear_ratio) {
     // 1296000 = 360° * 60 * 60 (arcseconds in a full circle)
     float steps_per_arcsecond = ((float)STEPS_PER_REV * MICROSTEPPING * gear_ratio) / 1296000.0f;
-    return (int32_t)(arcseconds * steps_per_arcsecond);
+    
+    // Use proper rounding instead of truncation
+    float exact_steps = arcseconds * steps_per_arcsecond;
+    return (int32_t)(exact_steps >= 0 ? exact_steps + 0.5f : exact_steps - 0.5f);
 }
 
 int32_t steps_to_arcseconds(int32_t steps, float gear_ratio) {
     float arcseconds_per_step = 1296000.0f / ((float)STEPS_PER_REV * MICROSTEPPING * gear_ratio);
-    return (int32_t)(steps * arcseconds_per_step);
+    
+    // Use proper rounding instead of truncation
+    float exact_arcseconds = steps * arcseconds_per_step;
+    return (int32_t)(exact_arcseconds >= 0 ? exact_arcseconds + 0.5f : exact_arcseconds - 0.5f);
 }
 
 static inline uint get_step_pin(uint8_t axis) {

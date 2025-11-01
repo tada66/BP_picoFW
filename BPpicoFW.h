@@ -15,6 +15,7 @@
 #include "hardware/uart.h"
 #include "hardware/irq.h"
 #include "hardware/pwm.h"
+#include "hardware/timer.h"
 
 void fan_set_speed(float duty_percent);
 int main();

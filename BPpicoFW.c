@@ -1,5 +1,4 @@
 #include "BPpicoFW.h"
-#include "hardware/timer.h"
 
 bool is_paused = false;
 
@@ -15,13 +14,12 @@ void fan_set_speed(float duty_percent) {
 
 int main()
 {
-
     stdio_init_all();
     
     // Configure stdio to use USB only, not UART
     stdio_usb_init();
     // Disable stdio on UART
-    // This unsures that DEBUG_PRINT only use the USB for output and doesn't make the uart output garbage
+    // This ensures that DEBUG_PRINT only use the USB for output and doesn't make the uart output garbage
     stdio_uart_init_full(uart1, 9600, -1, -1);
     
     // GPIO setup
@@ -51,20 +49,32 @@ int main()
     gpio_put(ONBOARD_LED_PIN, 0);
 
     int counter = 0;
-    char uart_buffer[64];
-    uint32_t current_time = time_us_32();
+    uint32_t last_telemetry_time = time_us_32();
+    const uint32_t TELEMETRY_INTERVAL_US = 10000000; // 10 seconds
 
     while (1) {
-        // send telemetry every 10 seconds
-        if (time_us_32() - current_time >= 10000000) {
+        uint32_t current_time = time_us_32();
+        
+        //time will wrap around every 71 minutes or so, handle that
+        uint32_t time_diff;
+        if (current_time >= last_telemetry_time) {
+            time_diff = current_time - last_telemetry_time;
+        } else {
+            time_diff = (UINT32_MAX - last_telemetry_time) + current_time + 1;
+        }
+
+        // Send telemetry every 10 seconds
+        if (time_diff >= TELEMETRY_INTERVAL_US) {
             float t = ds18b20_read_temp();
-            uint8_t telemetry[9];
-            memcpy(&telemetry[0], &t, sizeof(float));
-            memcpy(&telemetry[4], &counter, sizeof(int));
-            if(counter % 50 == 0)
-                queue_response(CMD_STATUS, telemetry, 8);
+            uint8_t telemetry[8];
+            memcpy(&telemetry[0], &t, sizeof(float));      // 4 bytes
+            memcpy(&telemetry[4], &counter, sizeof(int));  // 4 bytes
+            
+            queue_response(CMD_STATUS, telemetry, 8);
+            DEBUG_PRINT("Telemetry sent: Temp=%.2f°C, Counter=%d\n", t, counter);
+            
             counter++;
-            current_time = time_us_32();
+            last_telemetry_time = current_time;
         }
         uart_background_task();
     }
