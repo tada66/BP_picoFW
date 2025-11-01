@@ -86,41 +86,41 @@ void stepper_init_pins() {
 void stepper_init() {
     stepper_init_pins();
     multicore_launch_core1(stepper_core1_entry);
-    printf("Stepper motor control initialized and launched on core 1\n");
+    DEBUG_PRINT("Stepper motor control initialized and launched on core 1\n");
 }
 
 void stepper_set_enable(bool enable) {
     gpio_put(EN_PIN, enable ? 0 : 1); // Active low
     stepper_enabled = enable;
-    printf("Stepper motors %s\n", enable ? "enabled" : "disabled");
+    DEBUG_PRINT("Stepper motors %s\n", enable ? "enabled" : "disabled");
 }
 
 void stepper_pause() {
     stepper_paused = true;
-    printf("Stepper motors paused\n");
+    DEBUG_PRINT("Stepper motors paused\n");
 }
 
 void stepper_resume() {
     stepper_paused = false;
-    printf("Stepper motors resumed\n");
+    DEBUG_PRINT("Stepper motors resumed\n");
     if(!stepper_enabled)
         stepper_set_enable(true);
 }
 
 void stepper_queue_static_move(uint8_t axis, int32_t position_arcsec) {
     if (!stepper_enabled) {
-        printf("Stepper not enabled, cannot move!\n");
+        DEBUG_PRINT("Stepper not enabled, cannot move!\n");
         return;
     }
     
     if (axis >= NUM_AXES) {
-        printf("Invalid axis: %d\n", axis);
+        DEBUG_PRINT("Invalid axis: %d\n", axis);
         return;
     }
     
     // Stop tracking mode if active
     if (tracking_state.tracking_active) {
-        printf("Stopping tracking mode to execute static move\n");
+        DEBUG_PRINT("Stopping tracking mode to execute static move\n");
         tracking_state.tracking_active = false;
     }
     
@@ -134,19 +134,19 @@ void stepper_queue_static_move(uint8_t axis, int32_t position_arcsec) {
     current_command.axis = axis;
     current_command.target_position = position_arcsec;
 
-    printf("Queued static move: Axis %d to %ld arcsec\n", axis, position_arcsec);
+    DEBUG_PRINT("Queued static move: Axis %d to %ld arcsec\n", axis, position_arcsec);
 }
 
 void stepper_start_tracking(float x_rate_arcsec, float y_rate_arcsec, float z_rate_arcsec) {
     if (!stepper_enabled) {
-        printf("Stepper not enabled, cannot start tracking!\n");
+        DEBUG_PRINT("Stepper not enabled, cannot start tracking!\n");
         return;
     }
     
     // Stop any current movement command
     if (current_command.valid) {
         if(current_command.type == STATIC_MOVE) {
-            printf("Stopping current static move to start tracking\n");
+            DEBUG_PRINT("Stopping current static move to start tracking\n");
             sleep_ms(1);
         }
         current_command.valid = false;
@@ -170,14 +170,14 @@ void stepper_start_tracking(float x_rate_arcsec, float y_rate_arcsec, float z_ra
     gpio_put(Y_DIR_PIN, y_rate_arcsec >= 0);
     gpio_put(Z_DIR_PIN, z_rate_arcsec >= 0);
     
-    printf("Started tracking mode: X=%0.2f, Y=%0.2f, Z=%0.2f arcsec/sec\n", 
+    DEBUG_PRINT("Started tracking mode: X=%0.2f, Y=%0.2f, Z=%0.2f arcsec/sec\n", 
            x_rate_arcsec, y_rate_arcsec, z_rate_arcsec);
 }
 
 void stepper_stop_tracking() {
     if (tracking_state.tracking_active) {
         tracking_state.tracking_active = false;
-        printf("Tracking mode stopped\n");
+        DEBUG_PRINT("Tracking mode stopped\n");
     }
 }
 
@@ -196,8 +196,14 @@ int32_t stepper_get_position_arcsec(uint8_t axis) {
 }
 
 void stepper_core1_entry() {
-    printf("Stepper core 1 started\n");
-        
+    DEBUG_PRINT("Stepper core 1 started\n");
+    
+    // Add timing variables for non-blocking delays
+    static absolute_time_t last_step_time = {0};
+    static absolute_time_t last_dir_change_time = {0};
+    static const uint32_t STEP_INTERVAL_MS = 60;  // 60ms between steps
+    static const uint32_t DIR_SETUP_TIME_US = 1;  // 1μs direction setup time for TMC2209
+    
     while (true) {
         if (!stepper_enabled || stepper_paused) {
             sleep_ms(10);
@@ -205,6 +211,7 @@ void stepper_core1_entry() {
         }
         
         bool active_movement = false;
+        absolute_time_t now = get_absolute_time();
         
         if (tracking_state.tracking_active) {
             active_movement = true;
@@ -276,11 +283,25 @@ void stepper_core1_entry() {
             // Calculate steps needed
             int32_t steps = direction ? (target - *pos_ptr) : (*pos_ptr - target);
             
-            // Take a step if needed
-            if (steps > 0) {
-                // Take a step
+            // Set direction with proper timing for TMC2209
+            static bool last_direction[NUM_AXES] = {false, false, false};
+            if (last_direction[axis] != direction) {
+                gpio_put(get_dir_pin(axis), direction);
+                if (axis == AXIS_X) {
+                    gpio_put(X_DIR_PIN_INV, !direction);
+                }
+                last_direction[axis] = direction;
+                last_dir_change_time = now;
+            }
+            
+            // Check if it's time for the next step (non-blocking timing)
+            bool direction_setup_complete = absolute_time_diff_us(last_dir_change_time, now) >= DIR_SETUP_TIME_US;
+            bool step_interval_ready = absolute_time_diff_us(last_step_time, now) >= (STEP_INTERVAL_MS * 1000);
+            
+            if (steps > 0 && direction_setup_complete && step_interval_ready) {
+                // Take a step with TMC2209-compatible timing
                 gpio_put(get_step_pin(axis), 1);
-                sleep_us(5);  // 5μs pulse
+                sleep_us(10);  // Increased from 5μs to 10μs for TMC2209 reliability
                 gpio_put(get_step_pin(axis), 0);
                 
                 // Update position
@@ -290,13 +311,27 @@ void stepper_core1_entry() {
                     (*pos_ptr)--;
                 }
                 
-                // Sleep between steps (speed control)
-                sleep_ms(80);
-            } else {
+                // Update last step time
+                last_step_time = now;
+                
+                // Print progress occasionally
+                static int step_counter = 0;
+                if (++step_counter % 100 == 0) {
+                    DEBUG_PRINT("Axis %d: %ld steps remaining\n", axis, steps - 1);
+                }
+            } else if (steps == 0) {
                 // Target reached
                 current_command.valid = false;
-                printf("Axis %d movement complete\n", axis);
+                DEBUG_PRINT("Axis %d movement complete at position %ld steps\n", axis, *pos_ptr);
             }
+        }
+        
+        // If no active movement, sleep briefly to avoid busy-waiting
+        if (!active_movement) {
+            sleep_ms(1);
+        } else {
+            // Small delay to prevent overwhelming the system
+            sleep_us(100);
         }
     }
 }

@@ -35,7 +35,7 @@ pico_sdk_init()
 
 # Add executable. Default name is the project name, version 0.1
 
-add_executable(BPpicoFW BPpicoFW.c DS18B20.c UART.c STEPPER.c)
+add_executable(BPpicoFW BPpicoFW.c DS18B20.c UART.c STEPPER.c TMC2209.c)
 
 pico_set_program_name(BPpicoFW "BPpicoFW")
 pico_set_program_version(BPpicoFW "0.1")

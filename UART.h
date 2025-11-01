@@ -13,6 +13,7 @@
 #include "pico/time.h"
 #include "pico/stdlib.h"
 #include "STEPPER.h"
+#include "DEBUGPRINT.h"
 
 #define CRC8_POLYNOMIAL 0x07
 #define CMD_BUFFER_SIZE 128
@@ -22,7 +23,7 @@
 #define ACK_TIMEOUT_MS 1000
 #define MAX_RETRANSMITS 3
 #define MAX_MISSED_ACKS 2
-#define BAUD_RATE 115200
+#define BAUD_RATE 9600
 
 extern int uart_tx_dma_channel;
 
@@ -32,10 +33,11 @@ enum Commands {
     CMD_MOVE_TRACKING = 0x11,
     CMD_PAUSE = 0x12,
     CMD_RESUME = 0x13,
-    CMD_GETPOS = 0x14,
-    CMD_POSITION = 0x15,
-    CMD_STATUS = 0x20,
-    CMD_ESTOPTRIG = 0x21
+    CMD_STOP = 0x14,
+    CMD_GETPOS = 0x20,
+    CMD_POSITION = 0x21,
+    CMD_STATUS = 0x22,
+    CMD_ESTOPTRIG = 0x30
 };
 
 // Message tracking structure

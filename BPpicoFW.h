@@ -9,6 +9,7 @@
 #include "PIN_ASSIGNMENTS.h"
 #include "UART.h"
 #include "STEPPER.h"
+#include "DEBUGPRINT.h"
 
 #include "pico/stdlib.h"
 #include "hardware/uart.h"

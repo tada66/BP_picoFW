@@ -1,4 +1,5 @@
 #include "BPpicoFW.h"
+#include "hardware/timer.h"
 
 bool is_paused = false;
 
@@ -20,8 +21,8 @@ int main()
     // Configure stdio to use USB only, not UART
     stdio_usb_init();
     // Disable stdio on UART
-    // This unsures that printf only use the USB for output and doesn't make the uart output garbage
-    stdio_uart_init_full(uart1, 115200, -1, -1);
+    // This unsures that DEBUG_PRINT only use the USB for output and doesn't make the uart output garbage
+    stdio_uart_init_full(uart1, 9600, -1, -1);
     
     // GPIO setup
     gpio_init(TEMP_SENSE_PIN); gpio_set_dir(TEMP_SENSE_PIN, GPIO_OUT);
@@ -43,7 +44,7 @@ int main()
 
     // UART setup
     uart_init_protocol();
-    printf("Initialization complete!\n");
+    DEBUG_PRINT("Initialization complete!\n");
 
     gpio_put(ONBOARD_LED_PIN, 1); // Turn on onboard LED to indicate ready
     sleep_ms(4000);
@@ -51,16 +52,20 @@ int main()
 
     int counter = 0;
     char uart_buffer[64];
-    
+    uint32_t current_time = time_us_32();
+
     while (1) {
-        float t = ds18b20_read_temp();
-        uint8_t telemetry[9];
-        memcpy(&telemetry[0], &t, sizeof(float));
-        memcpy(&telemetry[4], &counter, sizeof(int));
-        if(counter % 50 == 0)
-            queue_response(CMD_STATUS, telemetry, 8);
+        // send telemetry every 10 seconds
+        if (time_us_32() - current_time >= 10000000) {
+            float t = ds18b20_read_temp();
+            uint8_t telemetry[9];
+            memcpy(&telemetry[0], &t, sizeof(float));
+            memcpy(&telemetry[4], &counter, sizeof(int));
+            if(counter % 50 == 0)
+                queue_response(CMD_STATUS, telemetry, 8);
+            counter++;
+            current_time = time_us_32();
+        }
         uart_background_task();
-        counter++;
-        sleep_ms(200);
     }
 }
