@@ -10,8 +10,13 @@ volatile int32_t x_position_steps = 0;
 volatile int32_t y_position_steps = 0;
 volatile int32_t z_position_steps = 0;
 
-// Command structures
-volatile stepper_command_t current_command = {STATIC_MOVE, false, 0, 0};
+// Multi-axis command structures - one command per axis
+volatile stepper_command_t axis_commands[NUM_AXES] = {
+    {STATIC_MOVE, false, AXIS_X, 0},
+    {STATIC_MOVE, false, AXIS_Y, 0},
+    {STATIC_MOVE, false, AXIS_Z, 0}
+};
+
 volatile tracking_state_t tracking_state = {false, {0.0f, 0.0f, 0.0f}, {0, 0, 0}};
 
 // Helper functions for step/arcsecond conversions
@@ -124,18 +129,21 @@ void stepper_queue_static_move(uint8_t axis, int32_t position_arcsec) {
         tracking_state.tracking_active = false;
     }
     
-    // Replace any current command with the new one (don't wait)
-    if (current_command.valid) {
-        DEBUG_PRINT("Replacing current movement with new command\n");
-        current_command.valid = false;
-    }
-    
-    current_command.axis = axis;
-    current_command.target_position = position_arcsec;
-    current_command.type = STATIC_MOVE;
-    current_command.valid = true;
+    // Set up command for this specific axis
+    axis_commands[axis].axis = axis;
+    axis_commands[axis].target_position = position_arcsec;
+    axis_commands[axis].type = STATIC_MOVE;
+    axis_commands[axis].valid = true;
 
     DEBUG_PRINT("Queued static move: Axis %d to %ld arcsec\n", axis, position_arcsec);
+}
+
+void stepper_stop_all_moves() {
+    // Stop all axis movements
+    for (uint8_t axis = 0; axis < NUM_AXES; axis++) {
+        axis_commands[axis].valid = false;
+    }
+    DEBUG_PRINT("All axis movements stopped\n");
 }
 
 void stepper_start_tracking(float x_rate_arcsec, float y_rate_arcsec, float z_rate_arcsec) {
@@ -144,14 +152,8 @@ void stepper_start_tracking(float x_rate_arcsec, float y_rate_arcsec, float z_ra
         return;
     }
     
-    // Stop any current movement command
-    if (current_command.valid) {
-        if(current_command.type == STATIC_MOVE) {
-            DEBUG_PRINT("Stopping current static move to start tracking\n");
-            sleep_ms(1);
-        }
-        current_command.valid = false;
-    }
+    // Stop all current movement commands
+    stepper_stop_all_moves();
     
     // Set up tracking state
     tracking_state.tracking_active = true;
@@ -199,9 +201,9 @@ int32_t stepper_get_position_arcsec(uint8_t axis) {
 void stepper_core1_entry() {
     DEBUG_PRINT("Stepper core 1 started\n");
     
-    // Updated timing for maximum TMC2209 performance
-    static absolute_time_t last_step_time = {0};
-    static absolute_time_t last_dir_change_time = {0};
+    // Per-axis timing variables for multi-axis support
+    static absolute_time_t last_step_time[NUM_AXES] = {0};
+    static absolute_time_t last_dir_change_time[NUM_AXES] = {0};
     
     // Fast stepping: 1ms interval = 1kHz step rate (very fast but safe)
     static const uint32_t STEP_INTERVAL_MS = 1;  // 1ms = 1000 steps/sec
@@ -209,6 +211,8 @@ void stepper_core1_entry() {
     // Direction setup time: 1μs (50x the required 20ns for safety)
     static const uint32_t DIR_SETUP_TIME_US = 1;
 
+    // Direction tracking per axis
+    static bool last_direction[NUM_AXES] = {false, false, false};
     
     while (true) {
         if (!stepper_enabled || stepper_paused) {
@@ -238,7 +242,7 @@ void stepper_core1_entry() {
                     // Check if it's time for a step
                     if ((current_time - tracking_state.last_step_time[axis]) >= step_interval_us) {
                         gpio_put(get_step_pin(axis), 1);
-                        sleep_us(5);
+                        sleep_us(1);  // Changed from 5 to 1μs for consistency
                         gpio_put(get_step_pin(axis), 0);
                         
                         // Update position
@@ -256,79 +260,75 @@ void stepper_core1_entry() {
                 }
             }
         }
-        // Process static movement commands
-        else if (current_command.valid) {
-            active_movement = true;
-            uint8_t axis = current_command.axis;
-            int32_t target;
-            
-            if (axis >= NUM_AXES) {
-                current_command.valid = false;
-                continue;
-            }
-            
-            volatile int32_t* pos_ptr = get_position_ptr(axis);
-            if (!pos_ptr) {
-                current_command.valid = false;
-                continue;
-            }
-            
-            // Calculate target in steps based on command type
-            if (current_command.type == STATIC_MOVE) {
-                // Convert target position from arcseconds to steps
-                target = arcseconds_to_steps(current_command.target_position, get_gear_ratio(axis));
-            }
-            
-            // Calculate the difference (can be positive or negative)
-            int32_t position_diff = target - *pos_ptr;
-            
-            // Determine direction based on the sign of the difference
-            bool direction = position_diff >= 0;
-            
-            // Calculate absolute steps needed
-            int32_t steps = direction ? position_diff : -position_diff;
-            
-            // Set direction with proper timing for TMC2209
-            static bool last_direction[NUM_AXES] = {false, false, false};
-            if (last_direction[axis] != direction) {
-                gpio_put(get_dir_pin(axis), direction);
-                if (axis == AXIS_X) {
-                    gpio_put(X_DIR_PIN_INV, !direction);
-                }
-                last_direction[axis] = direction;
-                last_dir_change_time = now;
-            }
-            
-            // Check if it's time for the next step (non-blocking timing)
-            bool direction_setup_complete = absolute_time_diff_us(last_dir_change_time, now) >= DIR_SETUP_TIME_US;
-            bool step_interval_ready = absolute_time_diff_us(last_step_time, now) >= (STEP_INTERVAL_MS * 1000);
-            
-            if (steps > 0 && direction_setup_complete && step_interval_ready) {
-                // Optimized step pulse timing for TMC2209
-                gpio_put(get_step_pin(axis), 1);
-                sleep_us(1);  // 1μs high pulse (10x the required 100ns)
-                gpio_put(get_step_pin(axis), 0);
-                // Implicit low time will be at least STEP_INTERVAL_MS duration
+        // Process static movement commands for all axes simultaneously
+        else {
+            // Process each axis independently
+            for (uint8_t axis = 0; axis < NUM_AXES; axis++) {
+                if (!axis_commands[axis].valid) continue;
                 
-                // Update position in the correct direction
-                if (direction) {
-                    (*pos_ptr)++;
-                } else {
-                    (*pos_ptr)--;
+                active_movement = true;
+                
+                volatile int32_t* pos_ptr = get_position_ptr(axis);
+                if (!pos_ptr) {
+                    axis_commands[axis].valid = false;
+                    continue;
                 }
                 
-                // Update last step time
-                last_step_time = now;
+                // Calculate target in steps
+                int32_t target = arcseconds_to_steps(axis_commands[axis].target_position, get_gear_ratio(axis));
                 
-                // Print progress occasionally
-                static int step_counter = 0;
-                if (++step_counter % 100 == 0) {
-                    DEBUG_PRINT("Axis %d: %ld steps remaining\n", axis, steps - 1);
+                // Calculate the difference (can be positive or negative)
+                int32_t position_diff = target - *pos_ptr;
+                
+                // Determine direction based on the sign of the difference
+                bool direction = position_diff >= 0;
+                
+                // Calculate absolute steps needed
+                int32_t steps = direction ? position_diff : -position_diff;
+                
+                // Set direction with proper timing for TMC2209
+                if (last_direction[axis] != direction) {
+                    gpio_put(get_dir_pin(axis), direction);
+                    
+                    // FIXED: X-axis has two motors, one must be inverted
+                    if (axis == AXIS_X) {
+                        gpio_put(X_DIR_PIN_INV, !direction);  // Inverted direction for second X motor
+                    }
+                    
+                    last_direction[axis] = direction;
+                    last_dir_change_time[axis] = now;
                 }
-            } else if (steps == 0) {
-                // Target reached
-                current_command.valid = false;
-                DEBUG_PRINT("Axis %d movement complete at position %ld steps\n", axis, *pos_ptr);
+                
+                // Check if it's time for the next step (non-blocking timing)
+                bool direction_setup_complete = absolute_time_diff_us(last_dir_change_time[axis], now) >= DIR_SETUP_TIME_US;
+                bool step_interval_ready = absolute_time_diff_us(last_step_time[axis], now) >= (STEP_INTERVAL_MS * 1000);
+                
+                if (steps > 0 && direction_setup_complete && step_interval_ready) {
+                    // Optimized step pulse timing for TMC2209
+                    gpio_put(get_step_pin(axis), 1);
+                    sleep_us(1);  // 1μs high pulse (10x the required 100ns)
+                    gpio_put(get_step_pin(axis), 0);
+                    
+                    // Update position in the correct direction
+                    if (direction) {
+                        (*pos_ptr)++;
+                    } else {
+                        (*pos_ptr)--;
+                    }
+                    
+                    // Update last step time for this axis
+                    last_step_time[axis] = now;
+                    
+                    // Print progress occasionally (per axis)
+                    static int step_counter[NUM_AXES] = {0};
+                    if (++step_counter[axis] % 1000 == 0) {
+                        DEBUG_PRINT("Axis %d: %ld steps remaining\n", axis, steps - 1);
+                    }
+                } else if (steps == 0) {
+                    // Target reached for this axis
+                    axis_commands[axis].valid = false;
+                    DEBUG_PRINT("Axis %d movement complete at position %ld steps\n", axis, *pos_ptr);
+                }
             }
         }
         
@@ -337,7 +337,7 @@ void stepper_core1_entry() {
             sleep_ms(1);
         } else {
             // Small delay to prevent overwhelming the system
-            sleep_us(100);
+            sleep_us(50);  // Reduced delay since we're handling multiple axes
         }
     }
 }

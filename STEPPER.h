@@ -49,6 +49,7 @@ void stepper_pause();
 void stepper_resume();
 
 void stepper_queue_static_move(uint8_t axis, int32_t position);
+void stepper_stop_all_moves();  // NEW: Stop all axis movements
 int32_t stepper_get_position(uint8_t axis);
 void stepper_start_tracking(float x_rate_arcsec, float y_rate_arcsec, float z_rate_arcsec);
 int32_t stepper_get_position_arcsec(uint8_t axis);
