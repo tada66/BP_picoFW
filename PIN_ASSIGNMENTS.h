@@ -19,3 +19,5 @@
 #define TEMP_SENSE_PIN 15
 #define FAN_PWM_PIN 14
 #define ONBOARD_LED_PIN 25
+
+#define TMC2209_TX_PIN 4 

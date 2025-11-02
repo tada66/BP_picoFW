@@ -1,7 +1,5 @@
 #include "UART.h"
 
-//TODO: IMPORTANT! COBS code is from wikipedia, how to cite it?
-
 
 int missed_acks = 0;
 uint8_t last_received_id = 0x00; // Last received message ID, a new message must have a different ID from the last one, 0x00 is invalid
@@ -12,8 +10,14 @@ volatile bool tx_busy = false;     // Flag to indicate if DMA TX is in progress
 
 int uart_tx_dma_channel = -1;      // DMA channel for UART TX
 
+response_message_t response_queue[MAX_RESPONSES];
+
 void uart_init_protocol(void) {
-    // Initialize UART
+
+    for (int i = 0; i < MAX_RESPONSES; i++) {
+        response_queue[i].ready = false;
+    }
+
     uart_init(UART_ID, BAUD_RATE);
     gpio_set_function(UART_TX_PIN, GPIO_FUNC_UART);
     gpio_set_function(UART_RX_PIN, GPIO_FUNC_UART);
@@ -24,7 +28,7 @@ void uart_init_protocol(void) {
     uart_tx_dma_channel = dma_claim_unused_channel(true);
     
     if (uart_tx_dma_channel < 0) {
-        printf("ERROR: Could not claim DMA channel for UART TX!\n");
+        DEBUG_PRINT("ERROR: Could not claim DMA channel for UART TX!\n");
         return;
     }
 
@@ -50,7 +54,7 @@ void uart_init_protocol(void) {
     irq_set_exclusive_handler(DMA_IRQ_0, on_uart_tx_dma_complete);
     irq_set_enabled(DMA_IRQ_0, true);
     
-    printf("UART protocol initialized with DMA for TX (channel %d)\n", uart_tx_dma_channel);
+    DEBUG_PRINT("UART protocol initialized with DMA for TX (channel %d)\n", uart_tx_dma_channel);
 }
 
 // DMA complete irq handler
@@ -86,6 +90,18 @@ uint8_t calculate_crc8(const uint8_t *data, size_t length) {
     return crc;
 }
 
+
+/*
+ * COBS (Consistent Overhead Byte Stuffing) Implementation
+ * 
+ * Source: Wikipedia - "Consistent Overhead Byte Stuffing"
+ * URL: https://en.wikipedia.org/wiki/Consistent_Overhead_Byte_Stuffing
+ * 
+ * Functions cobsEncode() and cobsDecode() are based on the reference
+ * implementation provided in the Wikipedia article.
+ * 
+ * Last accessed: 2nd November 2025
+ */
 size_t cobsEncode(const void *data, size_t length, uint8_t *buffer)
 {
 	uint8_t *encode = buffer; // Encoded byte pointer
@@ -133,9 +149,13 @@ size_t cobsDecode(const uint8_t *buffer, size_t length, void *data)
 }
 
 // Send a command with tracking for ACK and retransmission
-bool send_uart_command(uint8_t cmd_type, const uint8_t *data, size_t data_length) {
+bool send_command(uint8_t cmd_type, const uint8_t *data, size_t data_length) {
+    if (cmd_type == CMD_ACK) {
+        send_ack(data[0]); // Directly send ACK without tracking
+        return true;
+    }
     if (pending_message.in_use) {
-        printf("ERROR: Cannot send command 0x%02X, previous message still pending ACK!\n", cmd_type);
+        DEBUG_PRINT("ERROR: Cannot send command 0x%02X, previous message still pending ACK!\n", cmd_type);
         return false;
     }
 
@@ -183,8 +203,8 @@ void send_uart_message(pending_message_t *msg) {
     tx_buffer[encoded_size] = 0x00; // COBS delimiter
     
     // Set up and start DMA transfer
-    dma_channel_set_read_addr(uart_tx_dma_channel, tx_buffer, false);
-    dma_channel_set_trans_count(uart_tx_dma_channel, encoded_size + 1, false);
+    dma_channel_set_read_addr(uart_tx_dma_channel, tx_buffer, true);
+    dma_channel_set_trans_count(uart_tx_dma_channel, encoded_size + 1, true);
     
     // Mark TX as busy before starting DMA
     tx_busy = true;
@@ -192,7 +212,7 @@ void send_uart_message(pending_message_t *msg) {
     // Start the DMA transfer
     dma_channel_start(uart_tx_dma_channel);
 
-    printf("Sent: CMD=0x%02X, ID=0x%02X, LEN=%d, CRC=0x%02X\n", 
+    DEBUG_PRINT("Sent: CMD=0x%02X, ID=0x%02X, LEN=%d, CRC=0x%02X\n", 
         msg->cmd_type, msg->msg_id, msg->data_length, crc);
 }
 
@@ -210,17 +230,17 @@ void process_timeouts(void) {
                 
                 send_uart_message(&pending_message);
 
-                printf("RETRANSMIT attempt %d: CMD=0x%02X, ID=0x%02X\n", 
+                DEBUG_PRINT("RETRANSMIT attempt %d: CMD=0x%02X, ID=0x%02X\n", 
                         pending_message.retries, pending_message.cmd_type, pending_message.msg_id);
             } else {
                 // Max retries reached - give up
-                printf("ERROR: Message failed after %d retries: CMD=0x%02X, ID=0x%02X\n", 
+                DEBUG_PRINT("ERROR: Message failed after %d retries: CMD=0x%02X, ID=0x%02X\n", 
                         MAX_RETRANSMITS, pending_message.cmd_type, pending_message.msg_id);
                 pending_message.in_use = false;
 
                 missed_acks++;
                 if (missed_acks >= MAX_MISSED_ACKS) {
-                    printf("CRITICAL ERROR: 5 consecutive messages lost, resetting communication state\n");
+                    DEBUG_PRINT("CRITICAL ERROR: 5 consecutive messages lost, resetting communication state\n");
                     // Reset all pending messages
                     pending_message.in_use = false;
                     last_received_id = 0x00;
@@ -233,10 +253,39 @@ void process_timeouts(void) {
 
 void uart_background_task() {
     process_timeouts();
+    process_responses();
+}
+
+void queue_response(uint8_t cmd_type, const uint8_t *data, size_t data_length) {
+    for (int i = 0; i < MAX_RESPONSES; i++) {
+        if (!response_queue[i].ready) {
+            // Found an empty slot
+            response_queue[i].command = cmd_type;
+            response_queue[i].data_length = data_length > 16 ? 16 : data_length;
+            memcpy(response_queue[i].data, data, response_queue[i].data_length);
+            response_queue[i].ready = true;
+            return;
+        }
+    }
+    DEBUG_PRINT("ERROR: Response queue full, message dropped\n");
+}
+
+void process_responses(void) {
+    for (int i = 0; i < MAX_RESPONSES; i++) {
+        if (response_queue[i].ready) {
+            if (pending_message.in_use) {
+                continue;
+            }
+            send_command(response_queue[i].command, 
+                             response_queue[i].data, 
+                             response_queue[i].data_length);
+            response_queue[i].ready = false;
+        }
+    }
 }
 
 void send_ack(uint8_t msg_id) {
-    pending_message_t ack_msg;
+    static pending_message_t ack_msg;
     ack_msg.in_use = false;
     ack_msg.msg_id = generate_msg_id();
     ack_msg.cmd_type = CMD_ACK;
@@ -258,11 +307,11 @@ void on_uart_rx(void) {
                 uint8_t decoded[CMD_BUFFER_SIZE];
                 size_t decoded_size = cobsDecode(incoming_buffer, incoming_buffer_index, decoded);
                 
-                printf("COBS frame rec'd (%d bytes), decoded to %d bytes\n", 
+                DEBUG_PRINT("COBS frame rec'd (%d bytes), decoded to %d bytes\n", 
                        incoming_buffer_index, (int)decoded_size);
                 
                 if (decoded_size < 4) {  // CMD + ID + LEN + CRC minimum
-                    printf("ERROR: Decoded message too short: %d bytes\n", (int)decoded_size);
+                    DEBUG_PRINT("ERROR: Decoded message too short: %d bytes\n", (int)decoded_size);
                     continue;
                 }
 
@@ -270,7 +319,7 @@ void on_uart_rx(void) {
                 uint8_t msg_id = decoded[1];
                 uint8_t data_length = decoded[2];
                 if (decoded_size != data_length + 4) {  // CMD + ID + LEN + DATA + CRC
-                    printf("ERROR: Decoded message has unexpected length: got %d, expected %d\n", 
+                    DEBUG_PRINT("ERROR: DMSG unexpected length: got %d, expected %d\n", 
                             (int)decoded_size, data_length + 4);
                     continue;
                 }
@@ -278,24 +327,24 @@ void on_uart_rx(void) {
                 uint8_t received_crc = decoded[decoded_size - 1];
                 uint8_t calculated_crc = calculate_crc8(decoded, decoded_size - 1);
                 if (received_crc != calculated_crc) {
-                    printf("ERROR: CRC8 mismatch! Received: 0x%02X, Calculated: 0x%02X\n", 
+                    DEBUG_PRINT("ERROR: CRC8 mismatch! Received: 0x%02X, Calculated: 0x%02X\n", 
                             received_crc, calculated_crc);
                     continue;
                 }
 
                 if (msg_id == last_received_id) {
-                    printf("Duplicate message ID=0x%02X, sending ACK only\n", msg_id);
-                    send_ack(msg_id);
+                    DEBUG_PRINT("Duplicate message ID=0x%02X, sending ACK only\n", msg_id);
+                    queue_response(CMD_ACK, &msg_id, 1);
                     continue;
                 }
 
                 // New message, process it
                 last_received_id = msg_id;
-                printf("Command received: CMD=0x%02X, ID=0x%02X, Length=%d\n", 
+                DEBUG_PRINT("Command received: CMD=0x%02X, ID=0x%02X, Length=%d\n", 
                         cmd_type, msg_id, data_length);
                 
                 if (cmd_type != CMD_ACK) {
-                    send_ack(msg_id);
+                    queue_response(CMD_ACK, &msg_id, 1);
                 }
                 
                 // Process the command
@@ -305,9 +354,63 @@ void on_uart_rx(void) {
                             uint8_t acked_id = decoded[3];  // First data byte
                             if (pending_message.in_use && pending_message.msg_id == acked_id) {
                                 pending_message.in_use = false;
-                                printf("MSG 0x%02X ACKed\n", acked_id);
+                                DEBUG_PRINT("MSG 0x%02X ACKed\n", acked_id);
                                 missed_acks = 0;
                             }
+                        }
+                        break;
+                    case CMD_PAUSE:
+                        stepper_pause();
+                        break;
+                    case CMD_RESUME:
+                        stepper_resume();
+                        break;
+                    case CMD_STOP:
+                        stepper_set_enable(false);
+                        break;
+                    case CMD_MOVE_STATIC:
+                        if (data_length >= 5) {
+                            uint8_t axis = decoded[3];
+                            int32_t position;
+                            memcpy(&position, &decoded[4], sizeof(int32_t));
+                            stepper_queue_static_move(axis, position);
+                        } else {
+                            DEBUG_PRINT("ERROR: CMD_MOVE_STATIC requires at least 5 bytes of data\n");
+                        }
+                        break;
+                    case CMD_MOVE_TRACKING:
+                        if (data_length >= 12) { // 3 floats (4 bytes each)
+                            float x_rate, y_rate, z_rate;
+                            
+                            memcpy(&x_rate, &decoded[3], sizeof(float));
+                            memcpy(&y_rate, &decoded[7], sizeof(float));
+                            memcpy(&z_rate, &decoded[11], sizeof(float));
+                            
+                            DEBUG_PRINT("Received TRACK command: X=%.2f, Y=%.2f, Z=%.2f arcsec/sec\n", 
+                                x_rate, y_rate, z_rate);
+                                
+                            stepper_start_tracking(x_rate, y_rate, z_rate);
+                        } else {
+                            DEBUG_PRINT("ERROR: TRACK command requires 12 data bytes\n");
+                        }
+                        break;
+                    case CMD_GETPOS:
+                        if (data_length >= 1) {
+                            uint8_t axis = decoded[3];
+                            
+                            // Create a dummy response with the requested axis
+                            // and a fixed position value (123456 for testing)
+                            uint8_t response[5];
+                            response[0] = axis;
+                            
+                            int32_t position = stepper_get_position_arcsec(axis);
+                            memcpy(&response[1], &position, sizeof(position));
+                            
+                            // Send the response
+                            DEBUG_PRINT("Sending position for axis %d: %d\n", axis, position);
+                            queue_response(CMD_POSITION, response, 5);
+                        } else {
+                            DEBUG_PRINT("Error: CMD_GETPOS needs at least 1 data byte\n");
                         }
                         break;
                 }
@@ -318,7 +421,7 @@ void on_uart_rx(void) {
             if (incoming_buffer_index < CMD_BUFFER_SIZE - 1) {
                 incoming_buffer[incoming_buffer_index++] = c;
             } else {
-                printf("ERROR: COBS buffer overflow, resetting\n");
+                DEBUG_PRINT("ERROR: COBS buffer overflow, resetting\n");
                 incoming_buffer_index = 0;
             }
         }

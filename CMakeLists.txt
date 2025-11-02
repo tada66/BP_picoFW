@@ -35,7 +35,7 @@ pico_sdk_init()
 
 # Add executable. Default name is the project name, version 0.1
 
-add_executable(BPpicoFW BPpicoFW.c DS18B20.c UART.c)
+add_executable(BPpicoFW BPpicoFW.c DS18B20.c UART.c STEPPER.c)
 
 pico_set_program_name(BPpicoFW "BPpicoFW")
 pico_set_program_version(BPpicoFW "0.1")
@@ -49,7 +49,9 @@ target_link_libraries(BPpicoFW
         pico_stdlib
         hardware_pwm 
         hardware_uart
-        hardware_dma)
+        hardware_dma
+        pico_multicore
+        )
 
 # Add the standard include files to the build
 target_include_directories(BPpicoFW PRIVATE

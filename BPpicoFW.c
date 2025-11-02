@@ -19,19 +19,10 @@ int main()
     // Configure stdio to use USB only, not UART
     stdio_usb_init();
     // Disable stdio on UART
-    // This unsures that printf only use the USB for output and doesn't make the uart output garbage
-    stdio_uart_init_full(uart1, 115200, -1, -1);
+    // This ensures that DEBUG_PRINT only use the USB for output and doesn't make the uart output garbage
+    stdio_uart_init_full(uart1, 9600, -1, -1);
     
     // GPIO setup
-    gpio_init(Y_STEP_PIN); gpio_set_dir(Y_STEP_PIN, GPIO_OUT);
-    gpio_init(Y_DIR_PIN); gpio_set_dir(Y_DIR_PIN, GPIO_OUT);
-    gpio_init(X_STEP_PIN); gpio_set_dir(X_STEP_PIN, GPIO_OUT);
-    gpio_init(X_DIR_PIN); gpio_set_dir(X_DIR_PIN, GPIO_OUT);
-    gpio_init(X_DIR_PIN_INV); gpio_set_dir(X_DIR_PIN_INV, GPIO_OUT);
-    gpio_init(Z_STEP_PIN); gpio_set_dir(Z_STEP_PIN, GPIO_OUT);
-    gpio_init(Z_DIR_PIN); gpio_set_dir(Z_DIR_PIN, GPIO_OUT);
-    gpio_init(EN_SENSE_PIN); gpio_set_dir(EN_SENSE_PIN, GPIO_IN);
-    gpio_init(EN_PIN); gpio_set_dir(EN_PIN, GPIO_OUT);
     gpio_init(TEMP_SENSE_PIN); gpio_set_dir(TEMP_SENSE_PIN, GPIO_OUT);
     gpio_put(TEMP_SENSE_PIN, 1);
     gpio_init(FAN_PWM_PIN); gpio_set_dir(FAN_PWM_PIN, GPIO_OUT);
@@ -43,25 +34,51 @@ int main()
     pwm_set_wrap(slice, 65535); // 16-bit resolution
     pwm_set_clkdiv(slice, 76.3f); // divisor for ~25 kHz, lower frequencies cause the fan to emit audible high pitched noise
     pwm_set_enabled(slice, true);
+    fan_set_speed(100); // the fans are pretty slow, just let them be at full speed
+
+    sleep_ms(5000); // The stepper drivers do like to power up with some delay
+                    // haven't had any issues with this removed, however, some people on the internet reported issues 
+                    // and since this happens only once at startup, well leave it here for safety
+
+    // Initialize stepper motor GPIOs and launch process in a separate core
+    stepper_init();
 
     // UART setup
     uart_init_protocol();
-    printf("Initialization complete!\n");
+    DEBUG_PRINT("Initialization complete!\n");
 
     gpio_put(ONBOARD_LED_PIN, 1); // Turn on onboard LED to indicate ready
-    gpio_put(EN_PIN, 0);
+    sleep_ms(4000);
+    gpio_put(ONBOARD_LED_PIN, 0);
 
-    int counter = 0;
-    char uart_buffer[64];
+    uint32_t counter = 0;
+    uint32_t last_telemetry_time = time_us_32();
+    const uint32_t TELEMETRY_INTERVAL_US = 10000000; // 10 seconds
 
     while (1) {
-        float t = ds18b20_read_temp();
-        uint8_t telemetry[9];
-        memcpy(&telemetry[0], &t, sizeof(float));
-        memcpy(&telemetry[4], &counter, sizeof(int));
-        send_uart_command(CMD_STATUS, telemetry, 8);
+        uint32_t current_time = time_us_32();
+        
+        //time will wrap around every 71 minutes or so, handle that
+        uint32_t time_diff;
+        if (current_time >= last_telemetry_time) {
+            time_diff = current_time - last_telemetry_time;
+        } else {
+            time_diff = (UINT32_MAX - last_telemetry_time) + current_time + 1;
+        }
+
+        // Send telemetry every 10 seconds
+        if (time_diff >= TELEMETRY_INTERVAL_US) {
+            float t = ds18b20_read_temp();
+            uint8_t telemetry[8];
+            memcpy(&telemetry[0], &t, sizeof(float));      // 4 bytes
+            memcpy(&telemetry[4], &counter, sizeof(int));  // 4 bytes
+            
+            queue_response(CMD_STATUS, telemetry, 8);
+            DEBUG_PRINT("Telemetry sent: Temp=%.2f°C, Counter=%d\n", t, counter);
+            
+            counter++;
+            last_telemetry_time = current_time;
+        }
         uart_background_task();
-        counter++;
-        sleep_ms(330);
     }
 }
