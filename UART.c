@@ -240,7 +240,7 @@ void process_timeouts(void) {
 
                 missed_acks++;
                 if (missed_acks >= MAX_MISSED_ACKS) {
-                    DEBUG_PRINT("CRITICAL ERROR: 5 consecutive messages lost, resetting communication state\n");
+                    DEBUG_PRINT("CRITICAL ERROR: %d consecutive messages lost, resetting communication state\n", missed_acks);
                     // Reset all pending messages
                     pending_message.in_use = false;
                     last_received_id = 0x00;
