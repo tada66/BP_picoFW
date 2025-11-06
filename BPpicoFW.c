@@ -1,10 +1,15 @@
 #include "BPpicoFW.h"
 
 bool is_paused = false;
+// Track current fan speed (%) for telemetry
+static uint8_t g_fan_speed_percent = 0;
 
 void fan_set_speed(float duty_percent) {
     if (duty_percent < 0) duty_percent = 0;
     if (duty_percent > 100) duty_percent = 100;
+
+    // Save for telemetry
+    g_fan_speed_percent = (uint8_t)(duty_percent + 0.5f);
 
     uint slice = pwm_gpio_to_slice_num(FAN_PWM_PIN);
     uint chan  = pwm_gpio_to_channel(FAN_PWM_PIN);
@@ -48,12 +53,9 @@ int main()
     DEBUG_PRINT("Initialization complete!\n");
 
     gpio_put(ONBOARD_LED_PIN, 1); // Turn on onboard LED to indicate ready
-    sleep_ms(4000);
-    gpio_put(ONBOARD_LED_PIN, 0);
 
-    uint32_t counter = 0;
     uint32_t last_telemetry_time = time_us_32();
-    const uint32_t TELEMETRY_INTERVAL_US = 10000000; // 10 seconds
+    const uint32_t TELEMETRY_INTERVAL_US = 5000000; // 5 seconds
 
     while (1) {
         uint32_t current_time = time_us_32();
@@ -66,17 +68,30 @@ int main()
             time_diff = (UINT32_MAX - last_telemetry_time) + current_time + 1;
         }
 
-        // Send telemetry every 10 seconds
+        // Send telemetry every 5 seconds
         if (time_diff >= TELEMETRY_INTERVAL_US) {
             float t = ds18b20_read_temp();
-            uint8_t telemetry[8];
-            memcpy(&telemetry[0], &t, sizeof(float));      // 4 bytes
-            memcpy(&telemetry[4], &counter, sizeof(int));  // 4 bytes
-            
-            queue_response(CMD_STATUS, telemetry, 8);
-            DEBUG_PRINT("Telemetry sent: Temp=%.2f°C, Counter=%d\n", t, counter);
-            
-            counter++;
+
+            // Telemetry: temp (float) + X,Y,Z (int32) + enabled(u8) + paused(u8) + fan_pct(u8) = 19 bytes
+            uint8_t telemetry[19];
+            int32_t x = stepper_get_position_arcsec(AXIS_X);
+            int32_t y = stepper_get_position_arcsec(AXIS_Y);
+            int32_t z = stepper_get_position_arcsec(AXIS_Z);
+            uint8_t enabled = stepper_is_enabled() ? 1 : 0;
+            uint8_t paused  = stepper_is_paused() ? 1 : 0;
+
+            memcpy(&telemetry[0],  &t, sizeof(float));
+            memcpy(&telemetry[4],  &x, sizeof(int32_t));
+            memcpy(&telemetry[8],  &y, sizeof(int32_t));
+            memcpy(&telemetry[12], &z, sizeof(int32_t));
+            telemetry[16] = enabled;
+            telemetry[17] = paused;
+            telemetry[18] = g_fan_speed_percent;
+
+            queue_response(CMD_STATUS, telemetry, 19);
+            DEBUG_PRINT("Telemetry: T=%.2fC X=%d Y=%d Z=%d en=%d pa=%d fan=%u%%\n",
+                        t, x, y, z, enabled, paused, g_fan_speed_percent);
+
             last_telemetry_time = current_time;
         }
         uart_background_task();

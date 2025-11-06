@@ -1,7 +1,7 @@
 #include "STEPPER.h"
 
 bool stepper_enabled = false;
-volatile bool stepper_paused = false;
+volatile bool stepper_paused = true;
 
 volatile int32_t x_position_steps = 0;
 volatile int32_t y_position_steps = 0;
@@ -114,6 +114,14 @@ void stepper_resume() {
     DEBUG_PRINT("Stepper motors resumed\n");
     if(!stepper_enabled)
         stepper_set_enable(true);
+}
+
+bool stepper_is_enabled(void) {
+    return stepper_enabled;
+}
+
+bool stepper_is_paused(void) {
+    return stepper_paused;
 }
 
 void stepper_queue_static_move(uint8_t axis, int32_t position_arcsec) {

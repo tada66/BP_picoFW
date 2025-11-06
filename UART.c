@@ -261,7 +261,7 @@ void queue_response(uint8_t cmd_type, const uint8_t *data, size_t data_length) {
         if (!response_queue[i].ready) {
             // Found an empty slot
             response_queue[i].command = cmd_type;
-            response_queue[i].data_length = data_length > 16 ? 16 : data_length;
+            response_queue[i].data_length = data_length > RESPONSE_DATA_SIZE ? RESPONSE_DATA_SIZE : data_length;    // Cap data length if too long (shouldn't happen)
             memcpy(response_queue[i].data, data, response_queue[i].data_length);
             response_queue[i].ready = true;
             return;
@@ -395,23 +395,16 @@ void on_uart_rx(void) {
                         }
                         break;
                     case CMD_GETPOS:
-                        if (data_length >= 1) {
-                            uint8_t axis = decoded[3];
-                            
-                            // Create a dummy response with the requested axis
-                            // and a fixed position value (123456 for testing)
-                            uint8_t response[5];
-                            response[0] = axis;
-                            
-                            int32_t position = stepper_get_position_arcsec(axis);
-                            memcpy(&response[1], &position, sizeof(position));
-                            
-                            // Send the response
-                            DEBUG_PRINT("Sending position for axis %d: %d\n", axis, position);
-                            queue_response(CMD_POSITION, response, 5);
-                        } else {
-                            DEBUG_PRINT("Error: CMD_GETPOS needs at least 1 data byte\n");
-                        }
+                        uint8_t response[12];
+                        int32_t x = stepper_get_position_arcsec(AXIS_X);
+                        int32_t y = stepper_get_position_arcsec(AXIS_Y);
+                        int32_t z = stepper_get_position_arcsec(AXIS_Z);
+                        memcpy(&response[0],  &x, sizeof(int32_t));
+                        memcpy(&response[4],  &y, sizeof(int32_t));
+                        memcpy(&response[8],  &z, sizeof(int32_t));
+
+                        DEBUG_PRINT("Sending positions: X=%d, Y=%d, Z=%d (arcsec)\n", x, y, z);
+                        queue_response(CMD_POSITION, response, 12);
                         break;
                 }
             }

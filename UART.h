@@ -50,9 +50,10 @@ typedef struct {
     uint8_t retries;             // Number of retransmission attempts
 } pending_message_t;
 
+#define RESPONSE_DATA_SIZE 32
 typedef struct {
     uint8_t command;
-    uint8_t data[16];
+    uint8_t data[RESPONSE_DATA_SIZE];
     uint8_t data_length;
     bool ready;
 } response_message_t;

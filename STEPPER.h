@@ -56,6 +56,8 @@ void stepper_core1_entry();
 void stepper_set_enable(bool enable);
 void stepper_pause();
 void stepper_resume();
+bool stepper_is_enabled(void);
+bool stepper_is_paused(void);
 
 void stepper_queue_static_move(uint8_t axis, int32_t position);
 void stepper_stop_all_moves();  // NEW: Stop all axis movements
