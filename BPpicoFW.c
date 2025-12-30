@@ -55,9 +55,10 @@ int main()
     gpio_put(ONBOARD_LED_PIN, 1); // Turn on onboard LED to indicate ready
 
     uint32_t last_telemetry_time = time_us_32();
-    const uint32_t TELEMETRY_INTERVAL_US = 5000000; // 5 seconds
+    const uint32_t TELEMETRY_INTERVAL_US = 2000000; // 2 seconds
 
     while (1) {
+        uart_background_task();
         uint32_t current_time = time_us_32();
         
         //time will wrap around every 71 minutes or so, handle that
@@ -68,7 +69,7 @@ int main()
             time_diff = (UINT32_MAX - last_telemetry_time) + current_time + 1;
         }
 
-        // Send telemetry every 5 seconds
+        // Send telemetry every 2 seconds
         if (time_diff >= TELEMETRY_INTERVAL_US) {
             float t = ds18b20_read_temp();
 
@@ -94,6 +95,5 @@ int main()
 
             last_telemetry_time = current_time;
         }
-        uart_background_task();
     }
 }
