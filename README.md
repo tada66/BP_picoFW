@@ -32,14 +32,14 @@ But it is not recommended as the UART data can easily become corrupted at faster
 | Command name      | Command code  | Command direction | Data |     Description |
 | ----------------- | ------------- | ----------------- | ---- | --------------- |
 | CMD_ACK           | `0x01`        | -                 | -    | Acknowledgement |
-| CMD_MOVE_STATIC   | `0x10`        | RPi->Pico         | `uint8_t` axis selection `uint32_t` position in arcseconds | Rotates the axis to the specified position from the reference point | 
-| CMD_MOVE_TRACKING | `0x11`        | RPi->Pico         | `float32` X axis rate `float32` Y axis rate `float32` Z axis rate | Rotates each axis at a constant speed (speed specified in arcseconds/second) |
+| CMD_MOVE_STATIC   | `0x10`        | RPi->Pico         | `uint8_t` axis selection <br>`int32_t` target position (arcsec) | Rotates the axis to the specified position from the reference point | 
+| CMD_MOVE_TRACKING | `0x11`        | RPi->Pico         | `float32` X axis rate <br>`float32` Y axis rate <br>`float32` Z axis rate | Rotates each axis at a constant speed (speed specified in arcseconds/second) |
 | CMD_PAUSE         | `0x12`        | RPi->Pico         | -    | Pauses all movement |
 | CMD_RESUME        | `0x13`        | RPi->Pico         | -    | Resumes all movement and enables motors if they aren't enabled already |
 | CMD_STOP          | `0x14`        | RPi->Pico         | -    | Disables motor drivers (applies power to the `EN` pin) |
-| CMD_GETPOS        | `0x20`        | RPi->Pico         | `uint8_t` axis selection | Request for the current position of a specified axis |
-| CMD_POSITION      | `0x21`        | Pico->RPi         | `uint8_t` axis selection `uint32_t` position in arcseconds | This will be changed to respond will the position of all axis |
-| CMD_STATUS        | `0x22`        | Pico->RPi         | `float32` temperature | Telemetry data |
+| CMD_GETPOS        | `0x20`        | RPi->Pico         | - | Request for the current position of all axis |
+| CMD_POSITION      | `0x21`        | Pico->RPi         | `int32_t` X position (arcsec) <br>`int32_t` Y position (arcsec) <br>`int32_t` Z position (arcsec) | The current position of all of the axis. NOTE: the axis may still be in motion, so by the time this command is parsed on the receiving device the data may already be outdated, send `CMD_PAUSE` first |
+| CMD_STATUS        | `0x22`        | Pico->RPi         | `float32` temperature (°C) <br>`int32_t` X position (arcsec) <br>`int32_t` Y position (arcsec) <br>`int32_t` Z position (arcsec) <br>`uint8_t` motors_enabled <br>`uint8_t` motors_paused <br>`uint8_t` fan speed (%)| Telemetry data |
 | CMD_ESTOPTRIG     | `0x30`        | Pico->RPi         | -    | Error: motor power cut, reference point lost |
 
 ### Command format
