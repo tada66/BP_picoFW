@@ -181,6 +181,8 @@ void send_uart_message(pending_message_t *msg) {
         tight_loop_contents();
     }
     
+    uart_tx_wait_blocking(UART_ID);
+    
     memset(tx_buffer, 0, sizeof(tx_buffer));
     
     // Prepare the message in the TX buffer
@@ -273,13 +275,11 @@ void queue_response(uint8_t cmd_type, const uint8_t *data, size_t data_length) {
 void process_responses(void) {
     for (int i = 0; i < MAX_RESPONSES; i++) {
         if (response_queue[i].ready) {
-            if (pending_message.in_use) {
-                continue;
-            }
-            send_command(response_queue[i].command, 
+            if(send_command(response_queue[i].command, 
                              response_queue[i].data, 
-                             response_queue[i].data_length);
-            response_queue[i].ready = false;
+                             response_queue[i].data_length)) {
+                response_queue[i].ready = false;
+            }
         }
     }
 }
@@ -295,6 +295,7 @@ void send_ack(uint8_t msg_id) {
 }
 
 // UART RX interrupt handler
+// NOTE: No DEBUG_PRINT allowed here - it uses USB which can block/deadlock in IRQ context
 void on_uart_rx(void) {
     static uint8_t incoming_buffer[CMD_BUFFER_SIZE];
     static int incoming_buffer_index = 0;
@@ -307,11 +308,8 @@ void on_uart_rx(void) {
                 uint8_t decoded[CMD_BUFFER_SIZE];
                 size_t decoded_size = cobsDecode(incoming_buffer, incoming_buffer_index, decoded);
                 
-                DEBUG_PRINT("COBS frame rec'd (%d bytes), decoded to %d bytes\n", 
-                       incoming_buffer_index, (int)decoded_size);
-                
                 if (decoded_size < 4) {  // CMD + ID + LEN + CRC minimum
-                    DEBUG_PRINT("ERROR: Decoded message too short: %d bytes\n", (int)decoded_size);
+                    incoming_buffer_index = 0;
                     continue;
                 }
 
@@ -319,29 +317,25 @@ void on_uart_rx(void) {
                 uint8_t msg_id = decoded[1];
                 uint8_t data_length = decoded[2];
                 if (decoded_size != data_length + 4) {  // CMD + ID + LEN + DATA + CRC
-                    DEBUG_PRINT("ERROR: DMSG unexpected length: got %d, expected %d\n", 
-                            (int)decoded_size, data_length + 4);
+                    incoming_buffer_index = 0;
                     continue;
                 }
 
                 uint8_t received_crc = decoded[decoded_size - 1];
                 uint8_t calculated_crc = calculate_crc8(decoded, decoded_size - 1);
                 if (received_crc != calculated_crc) {
-                    DEBUG_PRINT("ERROR: CRC8 mismatch! Received: 0x%02X, Calculated: 0x%02X\n", 
-                            received_crc, calculated_crc);
+                    incoming_buffer_index = 0;
                     continue;
                 }
 
                 if (msg_id == last_received_id) {
-                    DEBUG_PRINT("Duplicate message ID=0x%02X, sending ACK only\n", msg_id);
                     queue_response(CMD_ACK, &msg_id, 1);
+                    incoming_buffer_index = 0;
                     continue;
                 }
 
                 // New message, process it
                 last_received_id = msg_id;
-                DEBUG_PRINT("Command received: CMD=0x%02X, ID=0x%02X, Length=%d\n", 
-                        cmd_type, msg_id, data_length);
                 
                 if (cmd_type != CMD_ACK) {
                     queue_response(CMD_ACK, &msg_id, 1);
@@ -354,7 +348,6 @@ void on_uart_rx(void) {
                             uint8_t acked_id = decoded[3];  // First data byte
                             if (pending_message.in_use && pending_message.msg_id == acked_id) {
                                 pending_message.in_use = false;
-                                DEBUG_PRINT("MSG 0x%02X ACKed\n", acked_id);
                                 missed_acks = 0;
                             }
                         }
@@ -374,8 +367,6 @@ void on_uart_rx(void) {
                             int32_t position;
                             memcpy(&position, &decoded[4], sizeof(int32_t));
                             stepper_queue_static_move(axis, position);
-                        } else {
-                            DEBUG_PRINT("ERROR: CMD_MOVE_STATIC requires at least 5 bytes of data\n");
                         }
                         break;
                     case CMD_MOVE_TRACKING:
@@ -385,13 +376,8 @@ void on_uart_rx(void) {
                             memcpy(&x_rate, &decoded[3], sizeof(float));
                             memcpy(&y_rate, &decoded[7], sizeof(float));
                             memcpy(&z_rate, &decoded[11], sizeof(float));
-                            
-                            DEBUG_PRINT("Received TRACK command: X=%.2f, Y=%.2f, Z=%.2f arcsec/sec\n", 
-                                x_rate, y_rate, z_rate);
                                 
                             stepper_start_tracking(x_rate, y_rate, z_rate);
-                        } else {
-                            DEBUG_PRINT("ERROR: TRACK command requires 12 data bytes\n");
                         }
                         break;
                     case CMD_GETPOS:
@@ -403,7 +389,6 @@ void on_uart_rx(void) {
                         memcpy(&response[4],  &y, sizeof(int32_t));
                         memcpy(&response[8],  &z, sizeof(int32_t));
 
-                        DEBUG_PRINT("Sending positions: X=%d, Y=%d, Z=%d (arcsec)\n", x, y, z);
                         queue_response(CMD_POSITION, response, 12);
                         break;
                 }
@@ -414,8 +399,7 @@ void on_uart_rx(void) {
             if (incoming_buffer_index < CMD_BUFFER_SIZE - 1) {
                 incoming_buffer[incoming_buffer_index++] = c;
             } else {
-                DEBUG_PRINT("ERROR: COBS buffer overflow, resetting\n");
-                incoming_buffer_index = 0;
+                incoming_buffer_index = 0;  // Buffer overflow, reset
             }
         }
     }
