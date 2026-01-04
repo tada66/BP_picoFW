@@ -33,6 +33,7 @@ enum Commands {
     CMD_PAUSE = 0x12,
     CMD_RESUME = 0x13,
     CMD_STOP = 0x14,
+    CMD_TRACK_CELESTIAL = 0x15,  // Autonomous celestial tracking with alignment matrix
     CMD_GETPOS = 0x20,
     CMD_POSITION = 0x21,
     CMD_STATUS = 0x22,

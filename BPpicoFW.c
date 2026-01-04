@@ -74,12 +74,13 @@ int main()
             float t = ds18b20_read_temp();
 
             // Telemetry: temp (float) + X,Y,Z (int32) + enabled(u8) + paused(u8) + fan_pct(u8) = 19 bytes
-            uint8_t telemetry[19];
+            uint8_t telemetry[20];
             int32_t x = stepper_get_position_arcsec(AXIS_X);
             int32_t y = stepper_get_position_arcsec(AXIS_Y);
             int32_t z = stepper_get_position_arcsec(AXIS_Z);
             uint8_t enabled = stepper_is_enabled() ? 1 : 0;
             uint8_t paused  = stepper_is_paused() ? 1 : 0;
+            uint8_t celestial_slewing = stepper_is_celestial_tracking() ? 1 : 0;
 
             memcpy(&telemetry[0],  &t, sizeof(float));
             memcpy(&telemetry[4],  &x, sizeof(int32_t));
@@ -87,11 +88,12 @@ int main()
             memcpy(&telemetry[12], &z, sizeof(int32_t));
             telemetry[16] = enabled;
             telemetry[17] = paused;
-            telemetry[18] = g_fan_speed_percent;
+            telemetry[18] = celestial_slewing;
+            telemetry[19] = g_fan_speed_percent;
 
-            queue_response(CMD_STATUS, telemetry, 19);
-            DEBUG_PRINT("Telemetry: T=%.2fC X=%d Y=%d Z=%d en=%d pa=%d fan=%u%%\n",
-                        t, x, y, z, enabled, paused, g_fan_speed_percent);
+            queue_response(CMD_STATUS, telemetry, 20);
+            DEBUG_PRINT("Telemetry: T=%.2fC X=%d Y=%d Z=%d en=%d pa=%d slew=%d fan=%u%%\n",
+                        t, x, y, z, enabled, paused, celestial_slewing, g_fan_speed_percent);
 
             last_telemetry_time = current_time;
         }

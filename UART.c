@@ -359,6 +359,7 @@ void on_uart_rx(void) {
                         stepper_resume();
                         break;
                     case CMD_STOP:
+                        stepper_stop_celestial_tracking();  // Stop celestial tracking if active
                         stepper_set_enable(false);
                         break;
                     case CMD_MOVE_STATIC:
@@ -378,6 +379,22 @@ void on_uart_rx(void) {
                             memcpy(&z_rate, &decoded[11], sizeof(float));
                                 
                             stepper_start_tracking(x_rate, y_rate, z_rate);
+                        }
+                        break;
+                    case CMD_TRACK_CELESTIAL:
+                        // Payload: RA(4) + Dec(4) + matrix(36) + refTime(8) + latitude(4) = 56 bytes
+                        if (data_length >= 56) {
+                            float ra, dec, latitude;
+                            float align_matrix[9];
+                            uint64_t ref_time;
+                            
+                            memcpy(&ra, &decoded[3], sizeof(float));
+                            memcpy(&dec, &decoded[7], sizeof(float));
+                            memcpy(align_matrix, &decoded[11], 9 * sizeof(float));
+                            memcpy(&ref_time, &decoded[47], sizeof(uint64_t));
+                            memcpy(&latitude, &decoded[55], sizeof(float));
+                            
+                            stepper_start_celestial_tracking(ra, dec, align_matrix, ref_time, latitude);
                         }
                         break;
                     case CMD_GETPOS:
