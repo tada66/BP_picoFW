@@ -370,6 +370,14 @@ void on_uart_rx(void) {
                             stepper_queue_static_move(axis, position);
                         }
                         break;
+                    case CMD_MOVE_RELATIVE:
+                        if (data_length >= 5) {
+                            uint8_t axis = decoded[3];
+                            int32_t offset;
+                            memcpy(&offset, &decoded[4], sizeof(int32_t));
+                            stepper_queue_relative_move(axis, offset);
+                        }
+                        break;
                     case CMD_MOVE_TRACKING:
                         if (data_length >= 12) { // 3 floats (4 bytes each)
                             float x_rate, y_rate, z_rate;

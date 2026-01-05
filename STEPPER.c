@@ -169,6 +169,10 @@ void stepper_queue_static_move(uint8_t axis, int32_t position_arcsec) {
     DEBUG_PRINT("Queued static move: Axis %d to %ld arcsec\n", axis, position_arcsec);
 }
 
+void stepper_queue_relative_move(uint8_t axis, int32_t offset_arcsec) {
+    stepper_queue_static_move(axis, stepper_get_position_arcsec(axis) + offset_arcsec);
+}
+
 void stepper_stop_all_moves() {
     for (uint8_t axis = 0; axis < NUM_AXES; axis++) {
         axis_commands[axis].valid = false;
