@@ -29,16 +29,16 @@ extern int uart_tx_dma_channel;
 enum Commands {
     CMD_ACK = 0x01,
     CMD_MOVE_STATIC = 0x10,
-    CMD_MOVE_TRACKING = 0x11,
-    CMD_PAUSE = 0x12,
-    CMD_RESUME = 0x13,
-    CMD_STOP = 0x14,
-    CMD_TRACK_CELESTIAL = 0x15,  // Autonomous celestial tracking with alignment matrix
-    CMD_MOVE_RELATIVE = 0x16,    // Move axis by relative offset
-    CMD_GETPOS = 0x20,
-    CMD_POSITION = 0x21,
-    CMD_STATUS = 0x22,
-    CMD_ESTOPTRIG = 0x30
+    CMD_MOVE_RELATIVE = 0x11,    // Move axis by relative offset
+    CMD_MOVE_LINEAR = 0x12,
+    CMD_TRACK_CELESTIAL = 0x13,  // Autonomous celestial tracking with alignment matrix
+    CMD_STOP = 0x20,
+    CMD_PAUSE = 0x21,
+    CMD_RESUME = 0x22,
+    CMD_GETPOS = 0x30,
+    EVT_POSITION = 0x40,
+    EVT_STATUS = 0x41,
+    EVT_REFLOST = 0x42
 };
 
 // Message tracking structure

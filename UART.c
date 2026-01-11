@@ -361,6 +361,7 @@ void on_uart_rx(void) {
                     case CMD_STOP:
                         stepper_stop_celestial_tracking();  // Stop celestial tracking if active
                         stepper_set_enable(false);
+                        queue_response(EVT_REFLOST, NULL, 0);
                         break;
                     case CMD_MOVE_STATIC:
                         if (data_length >= 5) {
@@ -378,7 +379,7 @@ void on_uart_rx(void) {
                             stepper_queue_relative_move(axis, offset);
                         }
                         break;
-                    case CMD_MOVE_TRACKING:
+                    case CMD_MOVE_LINEAR:
                         if (data_length >= 12) { // 3 floats (4 bytes each)
                             float x_rate, y_rate, z_rate;
                             
@@ -414,7 +415,7 @@ void on_uart_rx(void) {
                         memcpy(&response[4],  &y, sizeof(int32_t));
                         memcpy(&response[8],  &z, sizeof(int32_t));
 
-                        queue_response(CMD_POSITION, response, 12);
+                        queue_response(EVT_POSITION, response, 12);
                         break;
                 }
             }

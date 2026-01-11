@@ -91,7 +91,7 @@ int main()
             telemetry[18] = celestial_slewing;
             telemetry[19] = g_fan_speed_percent;
 
-            queue_response(CMD_STATUS, telemetry, 20);
+            queue_response(EVT_STATUS, telemetry, 20);
             DEBUG_PRINT("Telemetry: T=%.2fC X=%d Y=%d Z=%d en=%d pa=%d slew=%d fan=%u%%\n",
                         t, x, y, z, enabled, paused, celestial_slewing, g_fan_speed_percent);
 
