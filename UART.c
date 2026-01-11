@@ -204,14 +204,13 @@ void send_uart_message(pending_message_t *msg) {
     size_t encoded_size = cobsEncode(raw_buffer, raw_buf_size, tx_buffer);
     tx_buffer[encoded_size] = 0x00; // COBS delimiter
     
-    // Set up and start DMA transfer
-    dma_channel_set_read_addr(uart_tx_dma_channel, tx_buffer, true);
-    dma_channel_set_trans_count(uart_tx_dma_channel, encoded_size + 1, true);
-    
-    // Mark TX as busy before starting DMA
+    // Mark TX as busy before configuring DMA to avoid race with IRQ
     tx_busy = true;
     
-    // Start the DMA transfer
+    dma_channel_set_read_addr(uart_tx_dma_channel, tx_buffer, false);
+    dma_channel_set_trans_count(uart_tx_dma_channel, encoded_size + 1, false);
+    
+    // Now start the DMA transfer
     dma_channel_start(uart_tx_dma_channel);
 
     DEBUG_PRINT("Sent: CMD=0x%02X, ID=0x%02X, LEN=%d, CRC=0x%02X\n", 
