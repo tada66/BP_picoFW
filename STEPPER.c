@@ -205,11 +205,8 @@ void stepper_start_tracking(float x_rate_arcsec, float y_rate_arcsec, float z_ra
     tracking_state.last_step_time[AXIS_Y] = current_time;
     tracking_state.last_step_time[AXIS_Z] = current_time;
     
-    // Set direction pins based on rates
-    gpio_put(X_DIR_PIN, x_rate_arcsec >= 0);
-    gpio_put(X_DIR_PIN_INV, x_rate_arcsec < 0);  // Inverted
-    gpio_put(Y_DIR_PIN, y_rate_arcsec >= 0);
-    gpio_put(Z_DIR_PIN, z_rate_arcsec >= 0);
+    // Direction GPIOs are set by the core 1 tracking loop
+    // so that last_direction[] stays in sync
     
     DEBUG_PRINT("Started tracking mode: X=%0.2f, Y=%0.2f, Z=%0.2f arcsec/sec\n", 
            x_rate_arcsec, y_rate_arcsec, z_rate_arcsec);
@@ -430,6 +427,17 @@ void stepper_core1_entry() {
                 float rate = tracking_state.rates_arcsec_per_sec[axis];
                 if (rate == 0.0f) continue;
                 
+                // Set direction based on rate sign, keeping last_direction in sync
+                bool direction = (rate > 0.0f);
+                if (last_direction[axis] != direction) {
+                    gpio_put(get_dir_pin(axis), direction);
+                    if (axis == AXIS_X) {
+                        gpio_put(X_DIR_PIN_INV, !direction);
+                    }
+                    last_direction[axis] = direction;
+                    last_dir_change_time[axis] = now;
+                }
+                
                 // Calculate interval between steps
                 float gear_ratio = get_gear_ratio(axis);
                 float steps_per_arcsec = ((float)STEPS_PER_REV * MICROSTEPPING * gear_ratio) / 1296000.0f;
@@ -438,8 +446,10 @@ void stepper_core1_entry() {
                 if (steps_per_sec > 0.0f) {
                     uint32_t step_interval_us = (uint32_t)(1000000.0f / steps_per_sec);
                     
+                    bool direction_setup_complete = absolute_time_diff_us(last_dir_change_time[axis], now) >= DIR_SETUP_TIME_US;
+                    
                     // Check if it's time for a step
-                    if ((current_time - tracking_state.last_step_time[axis]) >= step_interval_us) {
+                    if (direction_setup_complete && (current_time - tracking_state.last_step_time[axis]) >= step_interval_us) {
                         gpio_put(get_step_pin(axis), 1);
                         sleep_us(TRACKING_STEP_PULSE_US);  // Use defined constant
                         gpio_put(get_step_pin(axis), 0);
