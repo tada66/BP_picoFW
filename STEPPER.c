@@ -232,7 +232,7 @@ void stepper_start_celestial_tracking(float ra, float dec, const float* align_ma
     
     celestial_state.target_ra = ra;
     celestial_state.target_dec = dec;
-    celestial_state.latitude = latitude;
+    celestial_state.latitude = latitude; // Latitude is not used and will be removed in the future
     celestial_state.ref_unix_time = ref_time;
     celestial_state.ref_boot_time_us = time_us_32();
     
@@ -309,16 +309,45 @@ static void compute_celestial_targets(void) {
     float mount_z_arcsec = atan2f(mount_vector[1], mount_vector[0]) * (180.0f * 3600.0f / M_PI);
     float mount_x_arcsec = asinf(mount_vector[2]) * (180.0f * 3600.0f / M_PI);
     
-    // Step 6: Compute field rotation (Y axis) - parallactic angle
-    float lat_rad = celestial_state.latitude * (M_PI / 180.0f);
-    float ha_rad = ra_rad;  // Hour angle in radians
+    // Step 6: Compute field rotation (Y axis)
+    // Derive the angle between mount-zenith and celestial-pole directions,
+    // both projected onto the plane perpendicular to the viewing direction.
+    // This is the parallactic angle, computed purely from the alignment matrix.
     
-    // Parallactic angle formula
-    float sin_pa = sinf(ha_rad) * cosf(lat_rad);
-    float cos_pa = sinf(lat_rad) * cos_dec - cosf(lat_rad) * sinf(dec_rad) * cosf(ha_rad);
-    float parallactic_angle_rad = atan2f(sin_pa, cos_pa);
+    // Celestial pole (0,0,1) in mount frame = third column of R
+    float pole_m[3] = {
+        celestial_state.align_matrix[2],   // R[0,2]
+        celestial_state.align_matrix[5],   // R[1,2]
+        celestial_state.align_matrix[8]    // R[2,2]
+    };
     
-    float mount_y_arcsec = parallactic_angle_rad * (180.0f * 3600.0f / M_PI);
+    // Mount zenith = (0,0,1).  Project perpendicular to mount_vector:
+    //   z_perp = z_hat - (z_hat · d) * d
+    float dot_zd = mount_vector[2];
+    float z_perp[3] = {
+        -dot_zd * mount_vector[0],
+        -dot_zd * mount_vector[1],
+        1.0f - dot_zd * mount_vector[2]
+    };
+    
+    // Project pole perpendicular to mount_vector:
+    //   p_perp = pole_m - (pole_m · d) * d
+    float dot_pd = pole_m[0]*mount_vector[0] + pole_m[1]*mount_vector[1] + pole_m[2]*mount_vector[2];
+    float p_perp[3] = {
+        pole_m[0] - dot_pd * mount_vector[0],
+        pole_m[1] - dot_pd * mount_vector[1],
+        pole_m[2] - dot_pd * mount_vector[2]
+    };
+    
+    // Signed angle from z_perp to p_perp around mount_vector
+    float dot_zp = z_perp[0]*p_perp[0] + z_perp[1]*p_perp[1] + z_perp[2]*p_perp[2];
+    // (z_perp × p_perp) · d  gives  |z|*|p|*sin(θ)
+    float cross_d = (z_perp[1]*p_perp[2] - z_perp[2]*p_perp[1]) * mount_vector[0]
+                  + (z_perp[2]*p_perp[0] - z_perp[0]*p_perp[2]) * mount_vector[1]
+                  + (z_perp[0]*p_perp[1] - z_perp[1]*p_perp[0]) * mount_vector[2];
+    
+    float field_rotation_rad = atan2f(cross_d, dot_zp);
+    float mount_y_arcsec = field_rotation_rad * (180.0f * 3600.0f / M_PI);
     
     // Store computed targets
     celestial_target_arcsec[AXIS_X] = (int32_t)mount_x_arcsec;
