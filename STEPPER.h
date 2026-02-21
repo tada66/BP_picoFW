@@ -61,6 +61,7 @@ typedef struct {
     float latitude;                 // Observer's latitude in degrees
     uint64_t ref_unix_time;         // Unix timestamp when tracking started
     uint32_t ref_boot_time_us;      // Boot time in microseconds when command was received
+    bool needs_unwrap_reset;        // Reset atan2 unwrap state on next computation
 } celestial_tracking_state_t;
 
 void stepper_init_pins();

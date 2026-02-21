@@ -241,6 +241,7 @@ void stepper_start_celestial_tracking(float ra, float dec, const float* align_ma
     }
     
     celestial_state.active = true;
+    celestial_state.needs_unwrap_reset = true;
     
     DEBUG_PRINT("Started celestial tracking: RA=%.4fh, Dec=%.4f°, Lat=%.4f°\n", 
                 ra, dec, latitude);
@@ -349,10 +350,40 @@ static void compute_celestial_targets(void) {
     float field_rotation_rad = atan2f(cross_d, dot_zp);
     float mount_y_arcsec = field_rotation_rad * (180.0f * 3600.0f / M_PI);
     
+    // Step 7: Unwrap Z and Y angles for continuity.
+    // atan2 returns values in (-180°,180°) = (-648000,648000) arcsec.
+    // Without unwrapping, crossing ±180° causes a 360° jump in the target,
+    // making the motor reverse direction and slew a full turn.
+    // Fix: keep targets continuous by adjusting to the nearest equivalent angle.
+    static int32_t prev_z = 0;
+    static int32_t prev_y = 0;
+    
+    int32_t new_z = (int32_t)mount_z_arcsec;
+    int32_t new_y = (int32_t)mount_y_arcsec;
+    
+    if (celestial_state.needs_unwrap_reset) {
+        celestial_state.needs_unwrap_reset = false;
+    } else {
+        // Unwrap Z: find equivalent angle closest to previous target
+        int32_t dz = new_z - prev_z;
+        while (dz > 648000)  dz -= 1296000;
+        while (dz < -648000) dz += 1296000;
+        new_z = prev_z + dz;
+        
+        // Unwrap Y: same
+        int32_t dy = new_y - prev_y;
+        while (dy > 648000)  dy -= 1296000;
+        while (dy < -648000) dy += 1296000;
+        new_y = prev_y + dy;
+    }
+    
+    prev_z = new_z;
+    prev_y = new_y;
+    
     // Store computed targets
     celestial_target_arcsec[AXIS_X] = (int32_t)mount_x_arcsec;
-    celestial_target_arcsec[AXIS_Z] = (int32_t)mount_z_arcsec;
-    celestial_target_arcsec[AXIS_Y] = (int32_t)mount_y_arcsec;
+    celestial_target_arcsec[AXIS_Z] = new_z;
+    celestial_target_arcsec[AXIS_Y] = new_y;
 }
 
 int32_t stepper_get_position(uint8_t axis) {
