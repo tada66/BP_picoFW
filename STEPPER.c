@@ -294,6 +294,8 @@ static void compute_celestial_targets(void) {
     
     // Step 4: Apply alignment matrix to transform sky -> mount coordinates
     // alignMatrix is row-major: [m00, m01, m02, m10, m11, m12, m20, m21, m22]
+    // Matrix may be a pure rotation (det=1) or a general affine (det≠1) that
+    // captures gear ratio errors and axis non-orthogonality.
     float mount_vector[3];
     mount_vector[0] = celestial_state.align_matrix[0]*sky_vector[0] + 
                       celestial_state.align_matrix[1]*sky_vector[1] + 
@@ -305,6 +307,18 @@ static void compute_celestial_targets(void) {
                       celestial_state.align_matrix[7]*sky_vector[1] + 
                       celestial_state.align_matrix[8]*sky_vector[2];
     
+    // Normalize mount vector to unit length.
+    // Essential for affine matrices (|A*sky| ≠ 1); safe no-op for rotations.
+    // Without this, asinf() gets values outside [-1,1] → NaN.
+    float mount_norm = sqrtf(mount_vector[0]*mount_vector[0] + 
+                             mount_vector[1]*mount_vector[1] + 
+                             mount_vector[2]*mount_vector[2]);
+    if (mount_norm > 1e-6f) {
+        mount_vector[0] /= mount_norm;
+        mount_vector[1] /= mount_norm;
+        mount_vector[2] /= mount_norm;
+    }
+    
     // Step 5: Convert unit vector to mount angles (in arcseconds)
     // X axis = tilt (altitude), Z axis = pan (azimuth)
     float mount_z_arcsec = atan2f(mount_vector[1], mount_vector[0]) * (180.0f * 3600.0f / M_PI);
@@ -315,12 +329,19 @@ static void compute_celestial_targets(void) {
     // both projected onto the plane perpendicular to the viewing direction.
     // This is the parallactic angle, computed purely from the alignment matrix.
     
-    // Celestial pole (0,0,1) in mount frame = third column of R
+    // Celestial pole (0,0,1) in mount frame = third column of alignment matrix.
+    // For affine matrices this is not unit-length; normalize for correct projections.
     float pole_m[3] = {
-        celestial_state.align_matrix[2],   // R[0,2]
-        celestial_state.align_matrix[5],   // R[1,2]
-        celestial_state.align_matrix[8]    // R[2,2]
+        celestial_state.align_matrix[2],   // A[0,2]
+        celestial_state.align_matrix[5],   // A[1,2]
+        celestial_state.align_matrix[8]    // A[2,2]
     };
+    float pole_norm = sqrtf(pole_m[0]*pole_m[0] + pole_m[1]*pole_m[1] + pole_m[2]*pole_m[2]);
+    if (pole_norm > 1e-6f) {
+        pole_m[0] /= pole_norm;
+        pole_m[1] /= pole_norm;
+        pole_m[2] /= pole_norm;
+    }
     
     // Mount zenith = (0,0,1).  Project perpendicular to mount_vector:
     //   z_perp = z_hat - (z_hat · d) * d
