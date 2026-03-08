@@ -158,6 +158,7 @@ void stepper_queue_static_move(uint8_t axis, int32_t position_arcsec) {
     if (celestial_state.active) {
         DEBUG_PRINT("Stopping celestial tracking to execute static move\n");
         celestial_state.active = false;
+        celestial_tracking_slewing_finished = false;  // Clear status flag so status reports INACTIVE
     }
     
     // Set up command for this specific axis
