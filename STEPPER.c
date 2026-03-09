@@ -422,6 +422,16 @@ int32_t stepper_get_position_arcsec(uint8_t axis) {
     return steps_to_arcseconds(steps, get_gear_ratio(axis));
 }
 
+// Trapezoidal velocity ramp: linearly interpolates step interval between
+// RAMP_MAX_INTERVAL_US (slow start) and RAMP_MIN_INTERVAL_US (full speed).
+// Uses min(steps_done, steps_remaining) so the motor decelerates symmetrically.
+static inline uint32_t compute_ramp_interval(uint32_t steps_done, uint32_t steps_remaining) {
+    uint32_t ramp_pos = steps_done < steps_remaining ? steps_done : steps_remaining;
+    if (ramp_pos >= RAMP_STEPS) return RAMP_MIN_INTERVAL_US;
+    return RAMP_MAX_INTERVAL_US -
+           (uint32_t)((uint64_t)(RAMP_MAX_INTERVAL_US - RAMP_MIN_INTERVAL_US) * ramp_pos / RAMP_STEPS);
+}
+
 void stepper_core1_entry() {
     DEBUG_PRINT("Stepper core 1 started\n");
     
@@ -431,6 +441,10 @@ void stepper_core1_entry() {
 
     // Direction tracking per axis
     static bool last_direction[NUM_AXES] = {false, false, false};
+
+    // Ramp state per axis
+    static uint32_t ramp_steps_done[NUM_AXES] = {0};
+    static bool ramp_was_moving[NUM_AXES] = {false, false, false};
     
     while (true) {
         if (!stepper_enabled || stepper_paused) {
@@ -459,6 +473,7 @@ void stepper_core1_entry() {
                 int32_t position_diff = target_steps - *pos_ptr;
                 
                 if (position_diff == 0){
+                    ramp_was_moving[axis] = false;
                     continue;
                 }
                 // Less than 3 steps difference means were close enough to be tracking instead of just chasing the object
@@ -467,8 +482,9 @@ void stepper_core1_entry() {
                 }
                 
                 bool direction = position_diff > 0;
+                uint32_t steps_remaining = direction ? (uint32_t)position_diff : (uint32_t)(-position_diff);
                 
-                // Update direction if changed
+                // Update direction if changed — also reset ramp
                 if (last_direction[axis] != direction) {
                     gpio_put(get_dir_pin(axis), direction);
                     if (axis == AXIS_X) {
@@ -476,11 +492,18 @@ void stepper_core1_entry() {
                     }
                     last_direction[axis] = direction;
                     last_dir_change_time[axis] = now;
+                    ramp_steps_done[axis] = 0;
+                }
+                // Reset ramp when axis starts from stopped
+                if (!ramp_was_moving[axis]) {
+                    ramp_steps_done[axis] = 0;
+                    ramp_was_moving[axis] = true;
                 }
                 
-                // Check timing - celestial tracking uses the same step interval as static moves
+                // Variable-speed step interval: ramp up from start, ramp down near target
+                uint32_t step_interval = compute_ramp_interval(ramp_steps_done[axis], steps_remaining);
                 bool direction_setup_complete = absolute_time_diff_us(last_dir_change_time[axis], now) >= DIR_SETUP_TIME_US;
-                bool step_interval_ready = absolute_time_diff_us(last_step_time[axis], now) >= (STEP_INTERVAL_MS * 1000);
+                bool step_interval_ready = absolute_time_diff_us(last_step_time[axis], now) >= step_interval;
                 
                 if (direction_setup_complete && step_interval_ready) {
                     gpio_put(get_step_pin(axis), 1);
@@ -494,6 +517,7 @@ void stepper_core1_entry() {
                     }
                     
                     last_step_time[axis] = now;
+                    ramp_steps_done[axis]++;
                 }
             }
             if (all_axes_at_target) {
@@ -586,11 +610,18 @@ void stepper_core1_entry() {
                     
                     last_direction[axis] = direction;
                     last_dir_change_time[axis] = now;
+                    ramp_steps_done[axis] = 0;
+                }
+                // Reset ramp when axis starts from stopped
+                if (!ramp_was_moving[axis]) {
+                    ramp_steps_done[axis] = 0;
+                    ramp_was_moving[axis] = true;
                 }
                 
-                // Check if it's time for the next step (non-blocking timing)
+                // Variable-speed step interval: ramp up from start, ramp down near target
+                uint32_t step_interval = compute_ramp_interval(ramp_steps_done[axis], (uint32_t)steps);
                 bool direction_setup_complete = absolute_time_diff_us(last_dir_change_time[axis], now) >= DIR_SETUP_TIME_US;
-                bool step_interval_ready = absolute_time_diff_us(last_step_time[axis], now) >= (STEP_INTERVAL_MS * 1000);
+                bool step_interval_ready = absolute_time_diff_us(last_step_time[axis], now) >= step_interval;
                 
                 if (steps > 0 && direction_setup_complete && step_interval_ready) {
                     gpio_put(get_step_pin(axis), 1);
@@ -606,6 +637,7 @@ void stepper_core1_entry() {
                     
                     // Update last step time for this axis
                     last_step_time[axis] = now;
+                    ramp_steps_done[axis]++;
                     
                     static int step_counter[NUM_AXES] = {0};
                     if (++step_counter[axis] % 1000 == 0) {
@@ -614,6 +646,7 @@ void stepper_core1_entry() {
                 } else if (steps == 0) {
                     // Target reached for this axis
                     axis_commands[axis].valid = false;
+                    ramp_was_moving[axis] = false;
                     DEBUG_PRINT("Axis %d movement complete at position %ld steps\n", axis, *pos_ptr);
                 }
             }

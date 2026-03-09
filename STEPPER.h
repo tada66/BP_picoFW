@@ -25,6 +25,11 @@
 #define ACTIVE_SLEEP_US 50          // Sleep between active movement cycles
 #define INACTIVE_SLEEP_MS 1         // Sleep when no movement active
 
+// Velocity ramp (trapezoidal profile) for slew moves — prevents step loss
+#define RAMP_STEPS 200              // Steps over which to accelerate / decelerate
+#define RAMP_MIN_INTERVAL_US 1000   // Fastest step rate  (1 kHz = full speed)
+#define RAMP_MAX_INTERVAL_US 5000   // Slowest step rate  (200 Hz = start/stop speed)
+
 enum {
     AXIS_X,
     AXIS_Y,
