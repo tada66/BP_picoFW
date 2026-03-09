@@ -221,7 +221,7 @@ void stepper_stop_tracking() {
 }
 
 
-void stepper_start_celestial_tracking(float ra, float dec, const float* align_matrix, uint64_t ref_time, float latitude) {
+void stepper_start_celestial_tracking(float ra, float dec, const float* align_matrix, uint64_t ref_time, float latitude, int32_t offset_x, int32_t offset_z) {
     if (!stepper_enabled) {
         DEBUG_PRINT("Stepper not enabled, cannot start celestial tracking!\n");
         return;
@@ -236,6 +236,8 @@ void stepper_start_celestial_tracking(float ra, float dec, const float* align_ma
     celestial_state.latitude = latitude; // Latitude is not used and will be removed in the future
     celestial_state.ref_unix_time = ref_time;
     celestial_state.ref_boot_time_us = time_us_32();
+    celestial_state.offset_x = offset_x;
+    celestial_state.offset_z = offset_z;
     
     for (int i = 0; i < 9; i++) {
         celestial_state.align_matrix[i] = align_matrix[i];
@@ -324,7 +326,10 @@ static void compute_celestial_targets(void) {
     // X axis = tilt (altitude), Z axis = pan (azimuth)
     float mount_z_arcsec = atan2f(mount_vector[1], mount_vector[0]) * (180.0f * 3600.0f / M_PI);
     float mount_x_arcsec = asinf(mount_vector[2]) * (180.0f * 3600.0f / M_PI);
-    
+
+    mount_x_arcsec -= celestial_state.offset_x;
+    mount_z_arcsec -= celestial_state.offset_z;
+
     // Step 6: Compute field rotation (Y axis)
     // Derive the angle between mount-zenith and celestial-pole directions,
     // both projected onto the plane perpendicular to the viewing direction.
