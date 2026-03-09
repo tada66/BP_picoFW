@@ -257,7 +257,7 @@ void stepper_stop_celestial_tracking(void) {
 }
 
 bool stepper_is_celestial_tracking(void) {
-    return celestial_tracking_slewing_finished;
+    return celestial_tracking_slewing_finished && celestial_state.active;
 }
 
 static void compute_celestial_targets(void) {
