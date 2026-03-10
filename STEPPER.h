@@ -11,7 +11,7 @@
 
 #define X_STEPPER_GEAR_RATIO 28.5714285714f // 400:14
 #define Y_STEPPER_GEAR_RATIO 23.5714285714f // 330:14
-#define Z_STEPPER_GEAR_RATIO 30.0f          // 420:14
+#define Z_STEPPER_GEAR_RATIO 30.00231f        // 420:14, corrected for measured 100" undershoot per 360°
 
 #define STEPS_PER_REV 400 // 0.9deg stepper motor
 #define MICROSTEPPING 16
