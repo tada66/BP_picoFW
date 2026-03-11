@@ -233,7 +233,7 @@ void stepper_start_celestial_tracking(float ra, float dec, const float* align_ma
     
     celestial_state.target_ra = ra;
     celestial_state.target_dec = dec;
-    celestial_state.latitude = latitude; // Latitude is not used and will be removed in the future
+    celestial_state.latitude = latitude;
     celestial_state.ref_unix_time = ref_time;
     celestial_state.ref_boot_time_us = time_us_32();
     celestial_state.offset_x = offset_x;
@@ -246,8 +246,8 @@ void stepper_start_celestial_tracking(float ra, float dec, const float* align_ma
     celestial_state.active = true;
     celestial_state.needs_unwrap_reset = true;
     
-    DEBUG_PRINT("Started celestial tracking: RA=%.4fh, Dec=%.4f°, Lat=%.4f°\n", 
-                ra, dec, latitude);
+    DEBUG_PRINT("Started celestial tracking: RA=%.4fh, Dec=%.4f°, offsets=(%d,%d)\n",
+                ra, dec, offset_x, offset_z);
 }
 
 void stepper_stop_celestial_tracking(void) {
@@ -327,8 +327,12 @@ static void compute_celestial_targets(void) {
     float mount_z_arcsec = atan2f(mount_vector[1], mount_vector[0]) * (180.0f * 3600.0f / M_PI);
     float mount_x_arcsec = asinf(mount_vector[2]) * (180.0f * 3600.0f / M_PI);
 
-    mount_x_arcsec -= celestial_state.offset_x;
-    mount_z_arcsec -= celestial_state.offset_z;
+    // Subtract motor offsets to convert from geometric angle to motor counter coordinates.
+    // motor_counter = geometric_arcsec - offset
+    // (offset = trueAlt_arcsec - motorX_arcsec at calibration reference, typically negative)
+    mount_x_arcsec -= (float)celestial_state.offset_x;
+    mount_z_arcsec -= (float)celestial_state.offset_z;
+    
 
     // Step 6: Compute field rotation (Y axis)
     // Derive the angle between mount-zenith and celestial-pole directions,

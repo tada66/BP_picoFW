@@ -67,8 +67,10 @@ typedef struct {
     uint64_t ref_unix_time;         // Unix timestamp when tracking started
     uint32_t ref_boot_time_us;      // Boot time in microseconds when command was received
     bool needs_unwrap_reset;        // Reset atan2 unwrap state on next computation
-    int32_t offset_x;
-    int32_t offset_z;
+    // Motor position offsets: motor_arcsec = geometric_angle_arcsec - offset
+    // Computed as: trueAlt_arcsec - motorX_arcsec at calibration reference point
+    int32_t offset_x;               // X-axis (altitude) motor offset in arcseconds
+    int32_t offset_z;               // Z-axis (azimuth)  motor offset in arcseconds
 } celestial_tracking_state_t;
 
 void stepper_init_pins();
