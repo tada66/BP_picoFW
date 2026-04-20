@@ -362,7 +362,7 @@ void on_uart_rx(void) {
                         stepper_set_enable(false);
                         queue_response(EVT_REFLOST, NULL, 0);
                         break;
-                    case CMD_MOVE_STATIC:
+                    case CMD_MOVE_ABSOLUTE:
                         if (data_length >= 5) {
                             uint8_t axis = decoded[3];
                             int32_t position;

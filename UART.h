@@ -28,7 +28,7 @@ extern int uart_tx_dma_channel;
 
 enum Commands {
     CMD_ACK = 0x01,
-    CMD_MOVE_STATIC = 0x10,
+    CMD_MOVE_ABSOLUTE = 0x10,
     CMD_MOVE_RELATIVE = 0x11,    // Move axis by relative offset
     CMD_MOVE_LINEAR = 0x12,
     CMD_TRACK_CELESTIAL = 0x13,  // Autonomous celestial tracking with alignment matrix
