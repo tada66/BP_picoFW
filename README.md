@@ -1,6 +1,6 @@
 # BPpicoFW - Raspberry Pi Pico astrophotography mount controller
-A highly configurable firmware for Raspberry Pi Pico that controls a 3-axis camera mount for astrophotography with stepper motors, temperature monitoring, and UART communication protocol. Intended to be used with the [StarSight PCB](https://github.com/tada66/BP_StarSight_PCB), 
-however, could be easily adapted to different PCBs as the pin assignments are fully configurable. 
+A highly configurable firmware for Raspberry Pi Pico that controls a 3-axis camera mount for astrophotography with autonomous celestial tracking, stepper motors, temperature monitoring, and a robust UART communication protocol. Intended to be used with the [StarSight PCB](https://github.com/tada66/BP_StarSight_PCB), 
+however, could be easily adapted to different PCBs as the pin assignments are fully configurable.
 
 ## Features
 3-Axis Stepper Motor Control (X, Y, Z axes)\
@@ -41,7 +41,7 @@ But it is not recommended as the UART data can easily become corrupted at faster
 | CMD_RESUME          | `0x22`        | RPi->Pico         | -    | Resumes all movement and enables motors if they aren't enabled already |
 | CMD_GETPOS          | `0x30`        | RPi->Pico         | - | Request for the current position of all axis |
 | EVT_POSITION        | `0x40`        | Pico->RPi         | `int32_t` X position (arcsec) <br>`int32_t` Y position (arcsec) <br>`int32_t` Z position (arcsec) | The current position of all of the axis. NOTE: the axis may still be in motion, so by the time this command is parsed on the receiving device the data may already be outdated, send `CMD_PAUSE` first |
-| EVT_STATUS          | `0x41`        | Pico->RPi         | `float32` temperature (°C) <br>`int32_t` X position (arcsec) <br>`int32_t` Y position (arcsec) <br>`int32_t` Z position (arcsec) <br>`uint8_t` motors_enabled <br>`uint8_t` motors_paused <br>`uint8_t` fan speed (%)| Telemetry data |
+| EVT_STATUS          | `0x41`        | Pico->RPi         | `float32` temperature (°C) <br>`int32_t` X position (arcsec) <br>`int32_t` Y position (arcsec) <br>`int32_t` Z position (arcsec) <br>`uint8_t` motors_enabled <br>`uint8_t` motors_paused <br>`uint8_t` celestial_slewing <br>`uint8_t` fan_speed_percent | Telemetry data (sent every 2 seconds) |
 | EVT_REFLOST       | `0x42`        | Pico->RPi         | -    | Error: motor power cut, reference point lost |
 
 ### Command format
