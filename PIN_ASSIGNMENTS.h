@@ -14,7 +14,7 @@
 
 // Stepper driver enable
 #define EN_SENSE_PIN 12
-#define EN_PIN 13   // a4988 drivers (and compatibles) use LOW to enable
+#define EN_PIN 12   // a4988 drivers (and compatibles) use LOW to enable
 
 #define TEMP_SENSE_PIN 15
 #define FAN_PWM_PIN 14
