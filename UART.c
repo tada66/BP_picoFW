@@ -390,8 +390,8 @@ void on_uart_rx(void) {
                         }
                         break;
                     case CMD_TRACK_CELESTIAL:
-                        // Payload: RA(4) + Dec(4) + matrix(36) + refTime(8) + offsets(8) = 64 bytes
-                        if (data_length >= 64) {
+                        // Payload: RA(4) + Dec(4) + matrix(36) + refTime(8) + offsets(8) = 60 bytes
+                        if (data_length >= 60) {
                             float ra, dec, latitude;
                             float align_matrix[9];
                             uint64_t ref_time;
