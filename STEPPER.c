@@ -23,7 +23,6 @@ volatile celestial_tracking_state_t celestial_state = {
     .target_ra = 0.0f,
     .target_dec = 0.0f,
     .align_matrix = {1,0,0, 0,1,0, 0,0,1},  // Identity matrix
-    .latitude = 0.0f,
     .ref_unix_time = 0,
     .ref_boot_time_us = 0
 };
@@ -221,7 +220,7 @@ void stepper_stop_tracking() {
 }
 
 
-void stepper_start_celestial_tracking(float ra, float dec, const float* align_matrix, uint64_t ref_time, float latitude, int32_t offset_x, int32_t offset_z) {
+void stepper_start_celestial_tracking(float ra, float dec, const float* align_matrix, uint64_t ref_time, int32_t offset_x, int32_t offset_z) {
     if (!stepper_enabled) {
         DEBUG_PRINT("Stepper not enabled, cannot start celestial tracking!\n");
         return;
@@ -233,7 +232,6 @@ void stepper_start_celestial_tracking(float ra, float dec, const float* align_ma
     
     celestial_state.target_ra = ra;
     celestial_state.target_dec = dec;
-    celestial_state.latitude = latitude;
     celestial_state.ref_unix_time = ref_time;
     celestial_state.ref_boot_time_us = time_us_32();
     celestial_state.offset_x = offset_x;

@@ -390,7 +390,7 @@ void on_uart_rx(void) {
                         }
                         break;
                     case CMD_TRACK_CELESTIAL:
-                        // Payload: RA(4) + Dec(4) + matrix(36) + refTime(8) + latitude(4) + offsets(8) = 64 bytes
+                        // Payload: RA(4) + Dec(4) + matrix(36) + refTime(8) + offsets(8) = 64 bytes
                         if (data_length >= 64) {
                             float ra, dec, latitude;
                             float align_matrix[9];
@@ -401,11 +401,10 @@ void on_uart_rx(void) {
                             memcpy(&dec, &decoded[7], sizeof(float));
                             memcpy(align_matrix, &decoded[11], 9 * sizeof(float));
                             memcpy(&ref_time, &decoded[47], sizeof(uint64_t));
-                            memcpy(&latitude, &decoded[55], sizeof(float));
-                            memcpy(&offset_x, &decoded[59], sizeof(int32_t));
-                            memcpy(&offset_z, &decoded[63], sizeof(int32_t));
+                            memcpy(&offset_x, &decoded[55], sizeof(int32_t));
+                            memcpy(&offset_z, &decoded[59], sizeof(int32_t));
                             
-                            stepper_start_celestial_tracking(ra, dec, align_matrix, ref_time, latitude, offset_x, offset_z);
+                            stepper_start_celestial_tracking(ra, dec, align_matrix, ref_time, offset_x, offset_z);
                         }
                         break;
                     case CMD_GETPOS:

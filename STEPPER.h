@@ -63,7 +63,6 @@ typedef struct {
     float target_ra;                // Right Ascension in hours (0.0 to 24.0)
     float target_dec;               // Declination in degrees (-90.0 to +90.0)
     float align_matrix[9];          // 3x3 alignment matrix (row-major)
-    float latitude;                 // Observer's latitude in degrees
     uint64_t ref_unix_time;         // Unix timestamp when tracking started
     uint32_t ref_boot_time_us;      // Boot time in microseconds when command was received
     bool needs_unwrap_reset;        // Reset atan2 unwrap state on next computation
@@ -87,7 +86,7 @@ void stepper_queue_relative_move(uint8_t axis, int32_t offset_arcsec);
 void stepper_stop_all_moves();  // NEW: Stop all axis movements
 int32_t stepper_get_position(uint8_t axis);
 void stepper_start_tracking(float x_rate_arcsec, float y_rate_arcsec, float z_rate_arcsec);
-void stepper_start_celestial_tracking(float ra, float dec, const float* align_matrix, uint64_t ref_time, float latitude, int32_t offset_x, int32_t offset_z);
+void stepper_start_celestial_tracking(float ra, float dec, const float* align_matrix, uint64_t ref_time, int32_t offset_x, int32_t offset_z);
 void stepper_stop_celestial_tracking(void);
 bool stepper_is_celestial_tracking(void);
 int32_t stepper_get_position_arcsec(uint8_t axis);
