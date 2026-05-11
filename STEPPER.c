@@ -1,6 +1,6 @@
 #include "STEPPER.h"
 
-bool stepper_enabled = false;
+volatile bool stepper_enabled = false;
 volatile bool stepper_paused = true;
 volatile bool celestial_tracking_slewing_finished = false;
 
