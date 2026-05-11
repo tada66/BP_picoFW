@@ -53,6 +53,7 @@ float ds18b20_read_temp(void) {
     onewire_write_byte(0xCC); // Skip ROM
     onewire_write_byte(0x44); // Convert T
     sleep_ms(750); // wait for conversion
+    // NOTE: This solution works fine as is, however, is not very efficient and could break the rest of the code if telemetry was more frequent
 
     onewire_reset();
     onewire_write_byte(0xCC); // Skip ROM

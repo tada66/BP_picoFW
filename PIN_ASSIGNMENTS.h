@@ -13,7 +13,7 @@
 #define Z_DIR_PIN 22
 
 // Stepper driver enable
-#define EN_SENSE_PIN 12
+#define EN_SENSE_PIN 12 // ESTOP button sense pin, as ESTOP is currently not connected, this pin is not used
 #define EN_PIN 12   // a4988 drivers (and compatibles) use LOW to enable
 
 #define TEMP_SENSE_PIN 15
